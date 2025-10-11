@@ -5,14 +5,12 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="HeyGen — Realtime Avatar Demo", page_icon="🎥", layout="centered")
 
-# ---- Fixed IDs (as requested) ----
+# Fixed IDs (your working ones)
 AVATAR_ID = "bf01e45ed0c04fe6958ca6551ce17ca0"
 VOICE_ID  = "f38a635bee7a4d1f9b0a654a31d050d2"  # Public "Mark"
 
-# ---- Secrets ----
 HEYGEN_API_KEY = st.secrets["HeyGen"]["heygen_api_key"]
 
-# ---- Create a streaming SESSION TOKEN (required by SDK; not your API key) ----
 def create_session_token():
     url = "https://api.heygen.com/v1/streaming.create_token"
     headers = {"X-Api-Key": HEYGEN_API_KEY, "Accept": "application/json"}
@@ -24,19 +22,15 @@ def create_session_token():
         raise RuntimeError(f"No session token in response: {r.text}")
     return token
 
-# Generate one token per page load (simple demo)
 session_token = create_session_token()
 
-st.title("🎥 HeyGen Streaming Avatar — quick proof")
-st.caption("One live avatar stream at low/720p quality; click a button to make it speak in real time.")
+st.title("🎥 HeyGen Streaming Avatar — Live Proof")
+st.caption("One live session. Click a button to speak. No rendering, no emails.")
 
-# ---- Embed a small HTML/JS client that uses the Streaming Avatar SDK ----
-# We pass config via a JSON script tag to avoid string escaping headaches.
 cfg = {
     "token": session_token,
     "avatar_id": AVATAR_ID,
     "voice_id": VOICE_ID,
-    # three short lines you wanted (they are only sent when you click)
     "lines": [
         "Hello, how are you.",
         "Welcome to our restaurant.",
@@ -44,19 +38,20 @@ cfg = {
     ]
 }
 
-components.html(f"""
+# HTML (NOT an f-string) — we inject the JSON config by replacing a marker.
+html_template = r"""
 <!doctype html>
 <html>
   <head>
     <meta charset="utf-8" />
     <style>
-      body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }}
-      #wrap {{ display: grid; gap: 12px; max-width: 840px; margin: 0 auto; }}
-      video {{ width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; }}
-      .row {{ display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); }}
-      button {{ padding: 10px 12px; border-radius: 10px; border: 1px solid #ddd; cursor: pointer; }}
-      button:disabled {{ opacity: 0.5; cursor: not-allowed; }}
-      .muted {{ font-size: 12px; color: #666; }}
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; }
+      #wrap { display: grid; gap: 12px; max-width: 840px; margin: 0 auto; }
+      video { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; }
+      .row { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); }
+      button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ddd; cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .muted { font-size: 12px; color: #666; }
     </style>
   </head>
   <body>
@@ -70,72 +65,65 @@ components.html(f"""
       <div class="muted" id="status">Initializing stream…</div>
     </div>
 
-    <!-- Pass config from Streamlit -->
-    <script id="cfg" type="application/json">{json.dumps(cfg)}</script>
+    <!-- Config from Streamlit -->
+    <script id="cfg" type="application/json">__CFG_JSON__</script>
 
-    <!-- Load the Streaming Avatar SDK as an ES module from jsDelivr -->
+    <!-- Streaming Avatar SDK from CDN -->
     <script type="module">
-      import {{ StreamingAvatar, TaskType, StreamingEvents }} from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar/+esm";
+      import { StreamingAvatar, TaskType, StreamingEvents } from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar/+esm";
 
       const cfg = JSON.parse(document.getElementById('cfg').textContent);
       const videoEl = document.getElementById('avatarVideo');
       const statusEl = document.getElementById('status');
       const btns = [document.getElementById('btn1'), document.getElementById('btn2'), document.getElementById('btn3')];
 
-      // Create SDK client with the per-session token
       const avatar = new StreamingAvatar({ token: cfg.token });
-
       let sessionId = null;
 
-      // When the media stream is ready, attach it to the <video>
-      avatar.on(StreamingEvents.STREAM_READY, (evt) => {{
-        const stream = evt.detail;
-        videoEl.srcObject = stream;
-        videoEl.muted = false;    // unmute so you can hear it
+      avatar.on(StreamingEvents.STREAM_READY, (evt) => {
+        videoEl.srcObject = evt.detail;
+        videoEl.muted = false;  // hear it
         statusEl.textContent = "Avatar is live. Click a button to speak.";
         btns.forEach(b => b.disabled = false);
-      }});
+      });
 
-      avatar.on(StreamingEvents.AVATAR_START_TALKING, () => {{
-        statusEl.textContent = "Speaking…";
-      }});
-      avatar.on(StreamingEvents.AVATAR_STOP_TALKING, () => {{
-        statusEl.textContent = "Idle. Click a button to speak again.";
-      }});
+      avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; });
+      avatar.on(StreamingEvents.AVATAR_STOP_TALKING, () => { statusEl.textContent = "Idle. Click again."; });
 
-      // Start the streaming session immediately
-      (async () => {{
-        try {{
-          const startRes = await avatar.createStartAvatar({{
-            // Use your specific avatar and voice; set lower quality for quicker/720p-ish streaming
+      // Start the streaming session (low quality ~ 720p-ish)
+      (async () => {
+        try {
+          const res = await avatar.createStartAvatar({
             avatarId: cfg.avatar_id,
-            quality: "low",                          // <= lower resolution/bitrate
-            voice: {{ voice_id: cfg.voice_id }}
-          }});
-          sessionId = startRes.session_id;
-        }} catch (err) {{
+            quality: "low",         // lower resolution/bitrate; faster start
+            voice: { voice_id: cfg.voice_id }
+          });
+          sessionId = res.session_id;
+        } catch (err) {
           console.error(err);
-          statusEl.textContent = "Failed to start avatar session. Check console.";
-        }}
-      }})();
+          statusEl.textContent = "Failed to start session. See console.";
+        }
+      })();
 
-      // Wire buttons to send short texts to the SAME live session
-      const sendLine = async (idx) => {{
-        try {{
-          await avatar.speak({{
+      // Send text to the SAME live session
+      const sendLine = async (idx) => {
+        try {
+          await avatar.speak({
             sessionId,
             text: cfg.lines[idx],
-            task_type: TaskType.REPEAT       // speak exactly the provided text
-          }});
-        }} catch (err) {{
+            task_type: TaskType.REPEAT   // say exactly what we send
+          });
+        } catch (err) {
           console.error(err);
           statusEl.textContent = "Speak failed. See console.";
-        }}
-      }};
+        }
+      };
       btns[0].addEventListener('click', () => sendLine(0));
       btns[1].addEventListener('click', () => sendLine(1));
       btns[2].addEventListener('click', () => sendLine(2));
     </script>
   </body>
 </html>
-""", height=560)
+"""
+
+components.html(html_template.replace("__CFG_JSON__", json.dumps(cfg)), height=560)
