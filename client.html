@@ -1,0 +1,96 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; padding:16px; }
+      #wrap { display: grid; gap: 12px; max-width: 840px; margin: 0 auto; }
+      video { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; }
+      .row { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); }
+      button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ddd; cursor: pointer; }
+      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      .muted { font-size: 12px; color: #666; }
+      .toprow { display:flex; gap:8px; align-items:center; }
+    </style>
+  </head>
+  <body>
+    <div id="wrap">
+      <div class="toprow">
+        <button id="unmuteBtn">Unmute audio</button>
+        <div class="muted" id="status">Initializing stream…</div>
+      </div>
+      <video id="avatarVideo" autoplay playsinline muted></video>
+      <div class="row">
+        <button id="btn1" disabled>Say line 1</button>
+        <button id="btn2" disabled>Say line 2</button>
+        <button id="btn3" disabled>Say line 3</button>
+      </div>
+    </div>
+
+    <!-- Streaming Avatar SDK (browser) -->
+    <script type="module">
+      import * as SDK from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar/+esm";
+      const StreamingAvatar  = SDK.StreamingAvatar;
+      const TaskType         = SDK.TaskType;
+      const StreamingEvents  = SDK.StreamingEvents;
+
+      // Values injected by Streamlit (simple string replace)
+      const TOKEN    = "__TOKEN__";
+      const AVATARID = "__AVATAR_ID__";
+      const VOICEID  = "__VOICE_ID__";
+      const LINE1    = "__LINE1__";
+      const LINE2    = "__LINE2__";
+      const LINE3    = "__LINE3__";
+
+      const videoEl  = document.getElementById('avatarVideo');
+      const statusEl = document.getElementById('status');
+      const unmuteBtn= document.getElementById('unmuteBtn');
+      const btns     = [document.getElementById('btn1'), document.getElementById('btn2'), document.getElementById('btn3')];
+
+      // Create client using the short-lived session token (NOT your API key)
+      const avatar = new StreamingAvatar({ token: TOKEN });
+      let sessionId = null;
+
+      unmuteBtn.addEventListener('click', async () => {
+        try { videoEl.muted = false; await videoEl.play(); unmuteBtn.disabled = true; unmuteBtn.textContent = "Audio unmuted"; }
+        catch (e) { console.warn(e); }
+      });
+
+      avatar.on(StreamingEvents.STREAM_READY, (evt) => {
+        videoEl.srcObject = evt.detail;
+        statusEl.textContent = "Avatar is live. Click a button to speak.";
+        btns.forEach(b => b.disabled = false);
+      });
+
+      avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; });
+      avatar.on(StreamingEvents.AVATAR_STOP_TALKING,  () => { statusEl.textContent = "Idle. Click again."; });
+
+      // Start low quality (~720p) for speed
+      (async () => {
+        try {
+          const res = await avatar.createStartAvatar({
+            avatarId: AVATARID,
+            quality: "low",
+            voice: { voice_id: VOICEID }
+          });
+          sessionId = res.session_id;
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent = "Failed to start session. See console.";
+        }
+      })();
+
+      const speak = async (text) => {
+        try {
+          await avatar.speak({ sessionId, text, task_type: TaskType.REPEAT });
+        } catch (err) {
+          console.error(err);
+          statusEl.textContent = "Speak failed. See console.";
+        }
+      };
+      btns[0].addEventListener('click', () => speak(LINE1));
+      btns[1].addEventListener('click', () => speak(LINE2));
+      btns[2].addEventListener('click', () => speak(LINE3));
+    </script>
+  </body>
+</html>
