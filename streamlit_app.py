@@ -5,7 +5,7 @@ import streamlit.components.v1 as components
 
 st.set_page_config(page_title="HeyGen — Realtime Avatar Demo", page_icon="🎥", layout="centered")
 
-# ----- Fixed IDs (working ones) -----
+# Fixed IDs
 AVATAR_ID = "bf01e45ed0c04fe6958ca6551ce17ca0"
 VOICE_ID  = "f38a635bee7a4d1f9b0a654a31d050d2"  # Public "Mark"
 
@@ -21,25 +21,18 @@ def create_session_token():
         raise RuntimeError(f"No session token in response: {r.text}")
     return token
 
-session_token = create_session_token()
+token = create_session_token()
 
 st.title("🎥 HeyGen Streaming Avatar — Live Proof")
 st.caption("One live session. Click a button to speak. No rendering, no emails.")
 
-# Only the browser needs this data
-cfg = {
-    "token": session_token,
-    "avatar_id": AVATAR_ID,
-    "voice_id": VOICE_ID,
-    "lines": [
-        "Hello, how are you.",
-        "Welcome to our restaurant.",
-        "It is our pleasure serving you."
-    ]
-}
+# Put lines as separate strings (no braces)
+line1 = "Hello, how are you."
+line2 = "Welcome to our restaurant."
+line3 = "It is our pleasure serving you."
 
-# IMPORTANT: not an f-string; no .format() anywhere.
-html_template = r"""
+# Plain string (NOT f-string). No unquoted {{braces}} anywhere.
+html_template = """
 <!doctype html>
 <html>
   <head>
@@ -69,33 +62,33 @@ html_template = r"""
       </div>
     </div>
 
-    <!-- Config injected from Streamlit -->
-    <script id="cfg" type="application/json">__CFG_JSON__</script>
-
     <!-- Streaming Avatar SDK -->
     <script type="module">
-      import { StreamingAvatar, TaskType, StreamingEvents } from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar/+esm";
+      import * as SDK from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar/+esm";
+      const StreamingAvatar = SDK.StreamingAvatar;
+      const TaskType = SDK.TaskType;
+      const StreamingEvents = SDK.StreamingEvents;
 
-      const cfg = JSON.parse(document.getElementById('cfg').textContent);
+      // Dynamic values injected as plain strings (no braces in Python)
+      const TOKEN    = "__TOKEN__";
+      const AVATARID = "__AVATAR_ID__";
+      const VOICEID  = "__VOICE_ID__";
+      const LINE1    = "__LINE1__";
+      const LINE2    = "__LINE2__";
+      const LINE3    = "__LINE3__";
+
       const videoEl = document.getElementById('avatarVideo');
       const statusEl = document.getElementById('status');
       const unmuteBtn = document.getElementById('unmuteBtn');
       const btns = [document.getElementById('btn1'), document.getElementById('btn2'), document.getElementById('btn3')];
 
-      // Create SDK client with the per-session token (not your API key)
-      const avatar = new StreamingAvatar({ token: cfg.token });
+      // Token passed as a string — create the client with a JSON.parse to avoid braces in Python
+      const avatar = new StreamingAvatar(JSON.parse('{"token":"'+TOKEN+'"}'));
       let sessionId = null;
 
-      // Unmute after user interaction (autoplay policy)
       unmuteBtn.addEventListener('click', async () => {
-        try {
-          videoEl.muted = false;
-          await videoEl.play();
-          unmuteBtn.disabled = true;
-          unmuteBtn.textContent = "Audio unmuted";
-        } catch (e) {
-          console.warn("Autoplay unblock failed:", e);
-        }
+        try { videoEl.muted = false; await videoEl.play(); unmuteBtn.disabled = true; unmuteBtn.textContent = "Audio unmuted"; }
+        catch (e) { console.warn("Autoplay unblock failed:", e); }
       });
 
       avatar.on(StreamingEvents.STREAM_READY, (evt) => {
@@ -107,44 +100,44 @@ html_template = r"""
       avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; });
       avatar.on(StreamingEvents.AVATAR_STOP_TALKING, () => { statusEl.textContent = "Idle. Click again."; });
 
-      // Start a low-quality (~720p) session for faster start
       (async () => {
         try {
-          const res = await avatar.createStartAvatar({
-            avatarId: cfg.avatar_id,
-            quality: "low",             // lower bitrate/resolution for speed
-            voice: { voice_id: cfg.voice_id }
-          });
+          // Build options as string then parse — no braces in Python layer
+          const opts = JSON.parse('{"avatarId":"'+AVATARID+'","quality":"low","voice":{"voice_id":"'+VOICEID+'"}}');
+          const res = await avatar.createStartAvatar(opts);
           sessionId = res.session_id;
         } catch (err) {
           console.error(err);
-          statusEl.textContent = "Failed to start session. Open browser console for details.";
+          statusEl.textContent = "Failed to start session. Open console.";
         }
       })();
 
-      // Send text to the SAME live session
-      const sendLine = async (idx) => {
+      const speak = async (text) => {
         try {
-          await avatar.speak({
-            sessionId,
-            text: cfg.lines[idx],
-            task_type: TaskType.REPEAT
-          });
+          const payload = JSON.parse('{"sessionId":"'+sessionId+'","text":"'+text+'","task_type":"REPEAT"}');
+          await avatar.speak(payload);
         } catch (err) {
           console.error(err);
           statusEl.textContent = "Speak failed. See console.";
         }
       };
-      btns[0].addEventListener('click', () => sendLine(0));
-      btns[1].addEventListener('click', () => sendLine(1));
-      btns[2].addEventListener('click', () => sendLine(2));
+      btns[0].addEventListener('click', () => speak(LINE1));
+      btns[1].addEventListener('click', () => speak(LINE2));
+      btns[2].addEventListener('click', () => speak(LINE3));
     </script>
   </body>
 </html>
 """
 
-# Inject config JSON safely (no f-strings, no .format)
-components.html(
-    html_template.replace("__CFG_JSON__", json.dumps(cfg)),
-    height=600
+# Inject values safely (simple string replace — no braces evaluated by Python)
+html = (
+    html_template
+      .replace("__TOKEN__", token)
+      .replace("__AVATAR_ID__", AVATAR_ID)
+      .replace("__VOICE_ID__", VOICE_ID)
+      .replace("__LINE1__", line1)
+      .replace("__LINE2__", line2)
+      .replace("__LINE3__", line3)
 )
+
+components.html(html, height=600)
