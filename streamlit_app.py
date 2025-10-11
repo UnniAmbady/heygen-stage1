@@ -1,4 +1,3 @@
-
 import time
 import requests
 import streamlit as st
@@ -6,10 +5,8 @@ from pathlib import Path
 
 st.set_page_config(page_title="HeyGen — Stage 1", page_icon="🎤", layout="centered")
 
-# ---- Fixed script for Stage 1 ----
 OUT_MSG = "Hello, how are you? Please let me know how I can help you today."
 
-# ---- API key from Streamlit secrets ----
 HEYGEN_API_KEY = st.secrets["HeyGen"]["heygen_api_key"]
 
 HEADERS = {
@@ -18,17 +15,15 @@ HEADERS = {
     "Content-Type": "application/json",
 }
 
-# ---- HeyGen endpoints ----
 CREATE_VIDEO_URL = "https://api.heygen.com/v2/video/generate"   # POST
 STATUS_URL       = "https://api.heygen.com/v1/video_status.get" # GET
 
 st.title("🎤 HeyGen — Stage 1 (Proprietary Avatar + Public Voice)")
 st.write("Speaks a fixed line with your avatar and the public voice **Mark**.")
 
-# Your known IDs
-avatar_id_default = "bf01e45ed0c04fe6958ca6551ce17ca0"              # your Avatar ID
-group_id_info     = "a948e05bf0344480a397bef6a1452b9e"              # your Avatar Group ID (FYI)
-voice_id_default  = "f38a635bee7a4d1f9b0a654a31d050d2"              # public voice “Mark”
+avatar_id_default = "bf01e45ed0c04fe6958ca6551ce17ca0"      # your Avatar ID
+group_id_info     = "a948e05bf0344480a397bef6a1452b9e"      # FYI
+voice_id_default  = "f38a635bee7a4d1f9b0a654a31d050d2"      # public voice “Mark”
 
 col1, col2 = st.columns(2)
 with col1:
@@ -37,7 +32,6 @@ with col2:
     voice_id = st.text_input("Voice ID (Mark)", value=voice_id_default)
 
 st.caption(f"(FYI) Avatar Group ID on your account: {group_id_info}")
-
 st.text_area("Script (Stage 1 fixed)", OUT_MSG, height=80, disabled=True)
 
 def create_video(avatar_id: str, voice_id: str, text: str) -> str:
@@ -52,9 +46,11 @@ def create_video(avatar_id: str, voice_id: str, text: str) -> str:
     }
     r = requests.post(CREATE_VIDEO_URL, headers=HEADERS, json=payload, timeout=60)
     r.raise_for_status()
-    vid = r.json().get("video_id")
+    resp = r.json()
+    # <-- FIX: support both shapes, but HeyGen returns {"data":{"video_id":...}}
+    vid = resp.get("video_id") or (resp.get("data") or {}).get("video_id")
     if not vid:
-        raise RuntimeError(f"No video_id in response: {r.text}")
+        raise RuntimeError(f"No video_id in response: {resp}")
     return vid
 
 def poll_video(video_id: str, timeout_s: int = 240) -> str:
