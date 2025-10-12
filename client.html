@@ -27,14 +27,13 @@
       </div>
     </div>
 
-    <!-- Streaming Avatar SDK (browser) -->
     <script type="module">
       import * as SDK from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar/+esm";
       const StreamingAvatar  = SDK.StreamingAvatar;
       const TaskType         = SDK.TaskType;
       const StreamingEvents  = SDK.StreamingEvents;
 
-      // Values injected by Streamlit (simple string replace)
+      /* Values injected as plain strings by Streamlit (find/replace) */
       const TOKEN    = "__TOKEN__";
       const AVATARID = "__AVATAR_ID__";
       const VOICEID  = "__VOICE_ID__";
@@ -47,8 +46,8 @@
       const unmuteBtn= document.getElementById('unmuteBtn');
       const btns     = [document.getElementById('btn1'), document.getElementById('btn2'), document.getElementById('btn3')];
 
-      // Create client using the short-lived session token (NOT your API key)
-      const avatar = new StreamingAvatar({ token: TOKEN });
+      /* Create SDK client with the token using JSON.parse to avoid object-literal braces in Python */
+      const avatar = new StreamingAvatar(JSON.parse('{"token":"'+TOKEN+'"}'));
       let sessionId = null;
 
       unmuteBtn.addEventListener('click', async () => {
@@ -61,18 +60,13 @@
         statusEl.textContent = "Avatar is live. Click a button to speak.";
         btns.forEach(b => b.disabled = false);
       });
-
       avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; });
       avatar.on(StreamingEvents.AVATAR_STOP_TALKING,  () => { statusEl.textContent = "Idle. Click again."; });
 
-      // Start low quality (~720p) for speed
       (async () => {
         try {
-          const res = await avatar.createStartAvatar({
-            avatarId: AVATARID,
-            quality: "low",
-            voice: { voice_id: VOICEID }
-          });
+          const opts = JSON.parse('{"avatarId":"'+AVATARID+'","quality":"low","voice":{"voice_id":"'+VOICEID+'"}}');
+          const res = await avatar.createStartAvatar(opts);
           sessionId = res.session_id;
         } catch (err) {
           console.error(err);
@@ -82,7 +76,8 @@
 
       const speak = async (text) => {
         try {
-          await avatar.speak({ sessionId, text, task_type: TaskType.REPEAT });
+          const payload = JSON.parse('{"sessionId":"'+sessionId+'","text":"'+text+'","task_type":"REPEAT"}');
+          await avatar.speak(payload);
         } catch (err) {
           console.error(err);
           statusEl.textContent = "Speak failed. See console.";
