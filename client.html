@@ -2,7 +2,7 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>HeyGen Streaming — Public Avatar</title>
+    <title>HeyGen Streaming — Interactive Avatar</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
       body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; padding:16px; }
@@ -12,21 +12,23 @@
       button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ddd; cursor: pointer; }
       button:disabled { opacity: .6; cursor: not-allowed; }
       .muted { font-size: 12px; color: #666; }
-      #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #e5e7eb; border-radius:8px; max-height:220px; overflow:auto; }
+      #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #e5e7eb; border-radius:8px; max-height:260px; overflow:auto; }
       .pill { padding: 2px 8px; border-radius: 999px; border:1px solid #ddd; }
       .ok  { color:#065f46; background:#ecfdf5; border-color:#a7f3d0; }
       .bad { color:#991b1b; background:#fef2f2; border-color:#fecaca; }
+      .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
     </style>
   </head>
   <body>
     <div id="wrap">
-      <div class="muted">
+      <div class="controls muted">
         Status: <span id="status">Initializing stream…</span>
         <span id="rtc" class="pill">RTC: …</span>
         <span id="tok" class="pill">Token: …</span>
+        <button id="micBtn" class="pill">Mic: off</button>
       </div>
 
-      <!-- Start muted; auto-unmute on first "Speak" click -->
+      <!-- Start muted; auto-unmute on first Speak click -->
       <video id="avatarVideo" autoplay playsinline muted></video>
 
       <div class="row">
@@ -53,17 +55,18 @@
       const btns     = [document.getElementById('btn1'), document.getElementById('btn2'), document.getElementById('btn3')];
       const rtcEl    = document.getElementById('rtc');
       const tokEl    = document.getElementById('tok');
+      const micBtn   = document.getElementById('micBtn');
       const logEl    = document.getElementById('log');
       const log = (...a) => { logEl.textContent += a.join(" ") + "\n"; logEl.scrollTop = logEl.scrollHeight; };
 
-      // Quick env + token diagnostics
-      const okRTC = !!window.RTCPeerConnection;
-      rtcEl.textContent = `RTC: ${okRTC ? "ok" : "missing"}`;
-      rtcEl.className = `pill ${okRTC ? "ok":"bad"}`;
-      tokEl.textContent = `Token: len=${TOKEN.length}`;
-      tokEl.className = `pill ${TOKEN.length>20 ? "ok":"bad"}`;
+      // Diagnostics
+      const hasRTC = !!window.RTCPeerConnection;
+      rtcEl.textContent = `RTC: ${hasRTC ? "ok" : "missing"}`;
+      rtcEl.className = `pill ${hasRTC ? "ok":"bad"}`;
+      tokEl.textContent = `Token: len=${(TOKEN||"").length}`;
+      tokEl.className = `pill ${TOKEN && TOKEN.length>20 ? "ok":"bad"}`;
 
-      // Create client and bind video element (required in some SDK builds)
+      // Init SDK
       const avatar = new StreamingAvatar({ token: TOKEN });
       if (avatar.setVideoElement) {
         try { avatar.setVideoElement(videoEl); } catch (e) { log("setVideoElement error:", e?.message || e); }
@@ -71,20 +74,22 @@
 
       let streamReady = false;
       let firstSpeakDone = false;
+      let micOn = false, micStream = null;
 
-      // 3s watchdog: if STREAM_READY doesn't arrive, warn loudly
+      // Watchdog
       setTimeout(() => {
         if (!streamReady) {
-          statusEl.textContent = "No stream after 3s — verify: (1) avatar is Interactive, (2) streaming is enabled on your plan, (3) network allows WebRTC.";
+          statusEl.textContent = "No stream after 3s — verify Interactive avatar, Streaming access, and network/WebRTC.";
           log("[WATCHDOG] STREAM_READY not received within 3s.");
         }
       }, 3000);
 
+      // Events
       avatar.on(StreamingEvents.STREAM_READY, (evt) => {
         streamReady = true;
         log("[EVENT] STREAM_READY");
         try {
-          // Attach MediaStream (works whether or not setVideoElement was used)
+          // Attach stream (works even if setVideoElement was called)
           if (evt?.detail) videoEl.srcObject = evt.detail;
           statusEl.textContent = "Avatar is live — click a button to speak.";
           btns.forEach(b => b.disabled = false);
@@ -108,10 +113,11 @@
       avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; log("[EVENT] START_TALKING"); });
       avatar.on(StreamingEvents.AVATAR_STOP_TALKING,  () => { statusEl.textContent = "Idle.";       log("[EVENT] STOP_TALKING"); });
 
+      // Start session
       (async () => {
         try {
           const opts = {
-            avatarId: AVATARID,   // must be Interactive
+            avatarId: AVATARID,          // must be Interactive
             quality: "low",
             voice: { voice_id: VOICEID }
           };
@@ -124,13 +130,10 @@
         }
       })();
 
-      // Speak helper (auto-unmute on first click to satisfy browser policies)
+      // Speak helper (auto-unmute on first click)
       const speak = async (text) => {
         try {
-          if (!firstSpeakDone) {
-            try { videoEl.muted = false; await videoEl.play(); } catch {}
-            firstSpeakDone = true;
-          }
+          if (!firstSpeakDone) { try { videoEl.muted = false; await videoEl.play(); } catch {} firstSpeakDone = true; }
           log("speak:", text);
           await avatar.speak({ task_type: TaskType.REPEAT, text });
         } catch (e) {
@@ -138,10 +141,41 @@
           log("speak error:", e?.message || e);
         }
       };
-
       btns[0].addEventListener('click', () => speak(L1));
       btns[1].addEventListener('click', () => speak(L2));
       btns[2].addEventListener('click', () => speak(L3));
+
+      // Mic (two-way)
+      const enableMic = async () => {
+        try {
+          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          const track = micStream.getAudioTracks()[0];
+          if (avatar.setMicrophoneEnabled) {
+            avatar.setMicrophoneEnabled(true, track);
+          } else if (avatar.setMicrophone) {
+            await avatar.setMicrophone(micStream);
+          }
+          micOn = true;
+          micBtn.textContent = "Mic: on";
+          micBtn.className = "pill ok";
+          log("Microphone enabled.");
+        } catch (e) {
+          log("Mic enable error:", e?.message || e);
+          micBtn.textContent = "Mic: error";
+          micBtn.className = "pill bad";
+        }
+      };
+      const disableMic = () => {
+        try {
+          if (micStream) micStream.getTracks().forEach(t => t.stop());
+        } catch {}
+        if (avatar.setMicrophoneEnabled) avatar.setMicrophoneEnabled(false);
+        micOn = false;
+        micBtn.textContent = "Mic: off";
+        micBtn.className = "pill";
+        log("Microphone disabled.");
+      };
+      micBtn.addEventListener('click', () => micOn ? disableMic() : enableMic());
     </script>
   </body>
 </html>
