@@ -5,7 +5,7 @@
     <title>HeyGen Streaming — Public Avatar</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; padding:16px; background:#fff; }
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; padding:16px; }
       #wrap { display:grid; gap:12px; max-width: 900px; margin: 0 auto; }
       video { width: 100%; aspect-ratio: 16/9; background:#000; border-radius: 12px; }
       .row { display:grid; gap:8px; grid-template-columns: repeat(3, 1fr); }
@@ -13,19 +13,20 @@
       button:disabled { opacity: .6; cursor: not-allowed; }
       .muted { font-size: 12px; color: #666; }
       #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #e5e7eb; border-radius:8px; max-height:220px; overflow:auto; }
-      .toprow { display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
-      .ok { color: #065f46; background: #ecfdf5; padding: 2px 8px; border-radius: 999px; border:1px solid #a7f3d0; }
-      .bad { color: #991b1b; background: #fef2f2; padding: 2px 8px; border-radius: 999px; border:1px solid #fecaca; }
+      .pill { padding: 2px 8px; border-radius: 999px; border:1px solid #ddd; }
+      .ok  { color:#065f46; background:#ecfdf5; border-color:#a7f3d0; }
+      .bad { color:#991b1b; background:#fef2f2; border-color:#fecaca; }
     </style>
   </head>
   <body>
     <div id="wrap">
-      <div class="toprow">
-        <button id="unmuteBtn">Unmute audio</button>
-        <span id="status" class="muted">Initializing stream…</span>
-        <span id="net" class="muted"></span>
+      <div class="muted">
+        Status: <span id="status">Initializing stream…</span>
+        <span id="rtc" class="pill">RTC: …</span>
+        <span id="tok" class="pill">Token: …</span>
       </div>
 
+      <!-- Start muted; we auto-unmute on first speak click -->
       <video id="avatarVideo" autoplay playsinline muted></video>
 
       <div class="row">
@@ -49,39 +50,50 @@
 
       const videoEl  = document.getElementById('avatarVideo');
       const statusEl = document.getElementById('status');
-      const unmute   = document.getElementById('unmuteBtn');
       const btns     = [document.getElementById('btn1'), document.getElementById('btn2'), document.getElementById('btn3')];
-      const netEl    = document.getElementById('net');
+      const rtcEl    = document.getElementById('rtc');
+      const tokEl    = document.getElementById('tok');
       const logEl    = document.getElementById('log');
       const log = (...a) => { logEl.textContent += a.join(" ") + "\n"; logEl.scrollTop = logEl.scrollHeight; };
 
-      // Basic environment diagnostics
-      try {
-        const okRTC = !!window.RTCPeerConnection;
-        netEl.textContent = `RTC: ${okRTC ? "ok" : "missing"}`;
-        netEl.className = okRTC ? "ok" : "bad";
-      } catch {}
+      // Quick env + token diagnostics
+      const okRTC = !!window.RTCPeerConnection;
+      rtcEl.textContent = `RTC: ${okRTC ? "ok" : "missing"}`;
+      rtcEl.className = `pill ${okRTC ? "ok":"bad"}`;
+      tokEl.textContent = `Token: len=${TOKEN.length}`;
+      tokEl.className = `pill ${TOKEN.length>20 ? "ok":"bad"}`;
 
       // Create client
       const avatar = new StreamingAvatar({ token: TOKEN });
 
-      // Stronger event diagnostics
+      let streamReady = false;
+      let firstSpeakDone = false;
+
+      // 3s watchdog: if STREAM_READY doesn't arrive, warn loudly
+      setTimeout(() => {
+        if (!streamReady) {
+          statusEl.textContent = "No stream after 3s — check that the avatar is Interactive and streaming is enabled on your account.";
+          log("[WATCHDOG] STREAM_READY not received within 3s.");
+        }
+      }, 3000);
+
       avatar.on(StreamingEvents.STREAM_READY, (evt) => {
+        streamReady = true;
         log("[EVENT] STREAM_READY");
         try {
-          // Some SDK builds expose a helper; binding directly is safest
-          videoEl.srcObject = evt.detail;
+          videoEl.srcObject = evt.detail; // Attach MediaStream
           statusEl.textContent = "Avatar is live — click a button to speak.";
           btns.forEach(b => b.disabled = false);
         } catch (e) {
           log("attach video error:", e?.message || e);
+          statusEl.textContent = "Video attach failed. See logs.";
         }
       });
 
       avatar.on(StreamingEvents.ERROR, (evt) => {
         const err = evt?.detail || evt;
-        statusEl.textContent = "SDK error. See logs.";
         log("[EVENT] ERROR:", typeof err === "string" ? err : JSON.stringify(err));
+        statusEl.textContent = "SDK error (see logs).";
       });
 
       avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
@@ -90,19 +102,12 @@
       });
 
       avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; log("[EVENT] START_TALKING"); });
-      avatar.on(StreamingEvents.AVATAR_STOP_TALKING,  () => { statusEl.textContent = "Idle."; log("[EVENT] STOP_TALKING"); });
+      avatar.on(StreamingEvents.AVATAR_STOP_TALKING,  () => { statusEl.textContent = "Idle.";       log("[EVENT] STOP_TALKING"); });
 
-      // Some browsers require user gesture before audio plays
-      unmute.addEventListener('click', async () => {
-        try { videoEl.muted = false; await videoEl.play(); unmute.disabled = true; unmute.textContent = "Audio unmuted"; }
-        catch (e) { log("unmute error:", e?.message || e); }
-      });
-
-      // Start session (explicit options)
       (async () => {
         try {
           const opts = {
-            avatarId: AVATARID,
+            avatarId: AVATARID,   // must be Interactive
             quality: "low",
             voice: { voice_id: VOICEID }
           };
@@ -115,9 +120,13 @@
         }
       })();
 
-      // Speak helper
+      // Speak helper (auto-unmute on first click to satisfy browser policies)
       const speak = async (text) => {
         try {
+          if (!firstSpeakDone) {
+            try { videoEl.muted = false; await videoEl.play(); } catch {}
+            firstSpeakDone = true;
+          }
           log("speak:", text);
           await avatar.speak({ task_type: TaskType.REPEAT, text });
         } catch (e) {
