@@ -1,187 +1,289 @@
 import json
+import time
 import requests
 import streamlit as st
-import streamlit.components.v1 as components
+from typing import Tuple, Dict, Any, Optional
 
-st.set_page_config(page_title="HeyGen — Realtime Avatar (Public)", page_icon="🎥", layout="centered")
+st.set_page_config(page_title="HeyGen Streaming (REST API) — Diagnostics & Control", page_icon="🎥", layout="centered")
 
 API_KEY = st.secrets["HeyGen"]["heygen_api_key"]
-HEYGEN_BASE = "https://api.heygen.com/v1"
+BASE = "https://api.heygen.com/v1"
+HEADERS_JSON = {"accept": "application/json", "content-type": "application/json", "x-api-key": API_KEY}
+HEADERS_GET  = {"accept": "application/json", "x-api-key": API_KEY}
 
-# ---------- Helpers ----------
+# ---------------------------
+# Helpers: HTTP + banners
+# ---------------------------
+def _post(url: str, payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any], str]:
+    r = requests.post(url, headers=HEADERS_JSON, json=payload, timeout=30)
+    try:
+        body = r.json()
+    except Exception:
+        body = {"raw": r.text}
+    return r.status_code, body, r.text
 
+def _get(url: str) -> Tuple[int, Dict[str, Any], str]:
+    r = requests.get(url, headers=HEADERS_GET, timeout=30)
+    try:
+        body = r.json()
+    except Exception:
+        body = {"raw": r.text}
+    return r.status_code, body, r.text
+
+def banner_for_response(title: str, status: int, body: Dict[str, Any]) -> None:
+    """Show a wide alert with success/failure based on HTTP status (200 good, 400 bad) and API code/message."""
+    code = body.get("code")
+    msg  = body.get("message") or body.get("error") or ""
+    lines = [f"{title}",
+             f"http_status: {status}",
+             f"result: {'200 (success)' if status == 200 else '400/other (failure)'}"]
+    if code is not None:
+        lines.append(f"api_code: {code}")
+    if msg:
+        lines.append(f"api_message: {msg}")
+    txt = "\n".join(lines)
+    if status == 200:
+        st.success(txt)
+    else:
+        st.error(txt, icon="🚨", width="stretch")
+
+# ---------------------------
+# REST: list avatars (for dropdown)
+# ---------------------------
+@st.cache_data(ttl=300)
 def fetch_interactive_avatars():
-    """
-    Return:
-      avatars: list[dict] -> [{label, avatar_id, default_voice, is_public, status, normal_preview, created_at}]
-      payload: dict        -> raw response body for diagnostics/interpretation
-    """
-    url = f"{HEYGEN_BASE}/streaming/avatar.list"
-    r = requests.get(url, headers={"accept": "application/json", "X-Api-Key": API_KEY}, timeout=30)
-    r.raise_for_status()
-    payload = r.json() if r.headers.get("content-type","").startswith("application/json") else {"raw": r.text}
-    data = payload.get("data") or []
-
-    out = []
+    status, body, _ = _get(f"{BASE}/streaming/avatar.list")
+    # Always show an interpretation banner per your request
+    banner_for_response("avatar.list", status, body)
+    data = body.get("data") or []
+    items = []
     for a in data:
-        out.append({
-            "label": a.get("pose_name") or a.get("avatar_id"),
-            "avatar_id": a.get("avatar_id"),
-            "default_voice": a.get("default_voice") or "",
-            "is_public": bool(a.get("is_public")),
-            "status": a.get("status"),
-            "normal_preview": a.get("normal_preview"),
-            "created_at": a.get("created_at"),
-        })
+        if a.get("status") == "ACTIVE":
+            items.append({
+                "label": a.get("pose_name") or a.get("avatar_id"),
+                "avatar_id": a.get("avatar_id"),
+                "default_voice": a.get("default_voice"),
+                "preview": a.get("normal_preview"),
+                "is_public": a.get("is_public"),
+            })
+    # dedupe by id
+    seen, out = set(), []
+    for it in items:
+        aid = it["avatar_id"]
+        if aid and aid not in seen:
+            seen.add(aid)
+            out.append(it)
+    return out
 
-    # de-dup by avatar_id while preserving order
-    seen, deduped = set(), []
-    for item in out:
-        aid = item["avatar_id"]
-        if not aid or aid in seen:
-            continue
-        seen.add(aid)
-        deduped.append(item)
-    return deduped, payload
+# ---------------------------
+# REST: create token (step 0)
+# ---------------------------
+def create_session_token() -> Optional[str]:
+    status, body, _ = _post(f"{BASE}/streaming.create_token", {})
+    banner_for_response("create_token", status, body)
+    if status != 200:
+        return None
+    return (body.get("data") or {}).get("token")
 
+# ---------------------------
+# REST: new session (step 1)
+# ---------------------------
+def new_session_payload(quality="medium", voice_rate=1, video_encoding="VP8") -> Dict[str, Any]:
+    return {
+        "quality": quality,
+        "voice": {"rate": voice_rate},
+        "video_encoding": video_encoding,
+        "disable_idle_timeout": False,
+        "version": "v2",
+        "stt_settings": {"provider": "deepgram", "confidence": 0.55},
+        "activity_idle_timeout": 120
+    }
 
-def create_streaming_token():
-    """Return (token, payload_dict) for interpretation."""
-    url = f"{HEYGEN_BASE}/streaming.create_token"
-    r = requests.post(url, headers={"X-Api-Key": API_KEY, "Accept": "application/json"}, timeout=30)
-    r.raise_for_status()
-    payload = r.json() if r.headers.get("content-type","").startswith("application/json") else {"raw": r.text}
-    token = (payload.get("data") or {}).get("token")
-    if not token:
-        raise RuntimeError(f"No token in response: {r.text}")
-    return token, payload
+def new_session() -> Optional[Dict[str, Any]]:
+    status, body, _ = _post(f"{BASE}/streaming.new", new_session_payload())
+    banner_for_response("streaming.new", status, body)
+    if status != 200:
+        return None
+    return body.get("data") or {}
 
+# ---------------------------
+# REST: start session (step 2)
+# ---------------------------
+def start_session(session_id: str) -> bool:
+    status, body, _ = _post(f"{BASE}/streaming.start", {"session_id": session_id})
+    # Per docs: success returns {} with HTTP 200; failure returns 400 with JSON
+    banner_for_response("streaming.start", status, body)
+    return status == 200
 
-def interpret_avatar_list(payload: dict, avatars: list[dict]) -> str:
-    """Human-friendly interpretation for /streaming/avatar.list."""
-    lines = []
-    code = payload.get("code")
-    lines.append(f"code (avatar.list): {code!r}  • expected: 100")
+# ---------------------------
+# REST: send task (speak)
+# ---------------------------
+def send_task(session_id: str, text: str) -> bool:
+    status, body, _ = _post(f"{BASE}/streaming.task", {"session_id": session_id, "text": text})
+    banner_for_response("streaming.task", status, body)
+    return status == 200
 
-    data = payload.get("data")
-    if not isinstance(data, list):
-        lines.append("data: <missing or not a list>")
-        return "\n".join(lines)
+# ---------------------------
+# REST: list sessions (status)
+# ---------------------------
+def list_sessions() -> Dict[str, Any]:
+    status, body, _ = _get(f"{BASE}/streaming.list")
+    banner_for_response("streaming.list", status, body)
+    return body
 
-    total = len(data)
-    lines.append(f"data: list with {total} item(s)")
+# ---------------------------
+# REST: keep-alive
+# ---------------------------
+def keep_alive() -> bool:
+    status, body, _ = _post(f"{BASE}/streaming.keep_alive", {})
+    banner_for_response("streaming.keep_alive", status, body)
+    return status == 200
 
-    by_status = {}
-    for a in data:
-        s = a.get("status", "<none>")
-        by_status[s] = by_status.get(s, 0) + 1
-    status_summary = ", ".join([f"{k}: {v}" for k, v in by_status.items()])
-    lines.append(f"status breakdown: {status_summary or '<none>'}")
+# ---------------------------
+# REST: stop session
+# ---------------------------
+def stop_session(session_id: str) -> bool:
+    status, body, _ = _post(f"{BASE}/streaming.stop", {"session_id": session_id})
+    banner_for_response("streaming.stop", status, body)
+    return status == 200
 
-    pub = sum(1 for a in data if a.get("is_public"))
-    prv = total - pub
-    lines.append(f"public: {pub}, private: {prv}")
+# ---------------------------
+# UI & State
+# ---------------------------
+if "session" not in st.session_state:
+    st.session_state.session = None  # dict from streaming.new
+if "avatar_selection" not in st.session_state:
+    st.session_state.avatar_selection = None
 
-    missing_avatar_id = sum(1 for a in data if not a.get("avatar_id"))
-    missing_pose_name = sum(1 for a in data if not a.get("pose_name"))
-    missing_default_voice = sum(1 for a in data if not a.get("default_voice"))
-    lines.append(f"missing avatar_id: {missing_avatar_id}, pose_name: {missing_pose_name}, default_voice: {missing_default_voice}")
+st.title("🎥 HeyGen Streaming — REST API Control Board")
+st.caption("Exact endpoints as in docs: new → start → task → list → keep_alive → stop. Strict 200/400 handling.")
 
-    first_active = next((a for a in data if a.get("status") == "ACTIVE"), None)
-    if first_active:
-        lines.append("first ACTIVE item:")
-        lines.append(f"  avatar_id: {first_active.get('avatar_id')}")
-        lines.append(f"  pose_name: {first_active.get('pose_name')}")
-        lines.append(f"  default_voice: {first_active.get('default_voice')}")
-        lines.append(f"  is_public: {first_active.get('is_public')}")
-        lines.append(f"  normal_preview: {first_active.get('normal_preview')}")
-    else:
-        lines.append("⚠️ no ACTIVE items found")
-
-    if avatars:
-        lines.append(f"prepared dropdown options: {len(avatars)} (deduplicated by avatar_id)")
-    else:
-        lines.append("⚠️ prepared dropdown has no items (likely all missing avatar_id or filtered)")
-
-    preview_count = min(3, total)
-    if preview_count:
-        lines.append("sample items (trimmed):")
-        for i in range(preview_count):
-            a = data[i]
-            lines.append(
-                f"  {i+1}. id={a.get('avatar_id')} • name={a.get('pose_name')} • default_voice={a.get('default_voice')} • status={a.get('status')} • public={a.get('is_public')}"
-            )
-    return "\n".join(lines)
-
-
-def interpret_token(payload: dict) -> str:
-    """Human-friendly interpretation for /streaming.create_token."""
-    lines = []
-    real_code = payload.get("code", None)
-    assumed_code = 100 if real_code is None else real_code
-    lines.append(f"code (create_token): {real_code!r}  • assumed_code: {assumed_code} (token endpoint may omit code)")
-
-    data = payload.get("data") or {}
-    token = data.get("token", "")
-    lines.append(f"token length: {len(token)}")
-    if token:
-        lines.append(f"token suffix: …{token[-6:]}")
-    for key in ("issued_at", "expires_at", "ttl", "region"):
-        if key in data:
-            lines.append(f"{key}: {data.get(key)}")
-    if real_code is None:
-        lines.append("note: response omitted 'code'; treating as success since token is present.")
-    return "\n".join(lines)
-
-# ---------- UI ----------
-
-st.title("🎥 HeyGen Streaming Avatar — Interactive (Diagnostics On)")
-st.caption("Dropdown via API. Voice = avatar.default_voice. Interpretation panels below show raw-response health.")
-
-# 1) Load avatar list
-with st.spinner("Loading Interactive Avatars…"):
-    avatars, raw_avatar_payload = fetch_interactive_avatars()
-
-interp_avatars = interpret_avatar_list(raw_avatar_payload, avatars)
-st.error(interp_avatars, icon="🧭", width="stretch")
-
+# Avatar chooser
+avatars = fetch_interactive_avatars()
 if not avatars:
     st.stop()
 
-# 2) Choose avatar
 labels = [a["label"] for a in avatars]
-idx = 0
-label = st.selectbox("Choose an Interactive Avatar:", labels, index=idx)
+default_idx = 0 if st.session_state.avatar_selection is None else max(0, next((i for i,a in enumerate(avatars) if a["avatar_id"] == st.session_state.avatar_selection), 0))
+label = st.selectbox("Choose an Interactive Avatar:", labels, index=default_idx, help="Changing avatar will stop the previous session, then create a fresh one.")
+
 chosen = next(a for a in avatars if a["label"] == label)
 avatar_id = chosen["avatar_id"]
-voice_id = chosen["default_voice"] or "f38a635bee7a4d1f9b0a654a31d050d2"  # fallback
+default_voice = chosen["default_voice"]
+preview = chosen["preview"]
 
-# Optional: preview image (no deprecation warning)
-if chosen.get("normal_preview"):
-    st.image(chosen["normal_preview"], caption=f"Preview • {label}", use_container_width=True)
+# If avatar changed → stop old session (if any)
+if st.session_state.avatar_selection and st.session_state.avatar_selection != avatar_id:
+    old = st.session_state.session
+    if old and old.get("session_id"):
+        st.info("Avatar changed → stopping previous session…")
+        stop_session(old["session_id"])
+    st.session_state.session = None
 
-# 3) Create token
-with st.spinner("Creating streaming token…"):
-    token, raw_token_payload = create_streaming_token()
+st.session_state.avatar_selection = avatar_id
 
-interp_token = interpret_token(raw_token_payload)
-st.error(interp_token, icon="🔐", width="stretch")
+# Show preview
+if preview:
+    st.image(preview, caption=f"Preview • {label}", use_container_width=True)
 
-st.success(f"Using avatar: {label}  •  id: {avatar_id}  •  voice: {voice_id[:8]}…")
-st.info(f"Token OK (len={len(token)}). Prefix: {token[:8]}…")
+st.divider()
 
-# 4) Inject values into the HTML client
-with open("client.html", "r", encoding="utf-8") as f:
-    html = f.read()
+# Controls row
+col1, col2, col3 = st.columns(3)
+with col1:
+    if st.button("Step 0: Create Token (diagnostic)"):
+        token = create_session_token()
+        st.write("token length:", len(token) if token else 0)
+with col2:
+    if st.button("Step 1: Create New Session"):
+        data = new_session()
+        if data:
+            # Persist the important bits into state
+            st.session_state.session = {
+                "session_id": data.get("session_id"),
+                "realtime_endpoint": data.get("realtime_endpoint"),
+                "url": data.get("url"),
+                "access_token": data.get("access_token"),
+                "livekit_agent_token": data.get("livekit_agent_token"),
+                "created_at": time.time(),
+                "avatar_id": avatar_id,
+                "voice_id": default_voice,
+            }
+with col3:
+    if st.button("Step 2: Start Session"):
+        s = st.session_state.session
+        if not s or not s.get("session_id"):
+            st.error("No session_id. Click 'Step 1: Create New Session' first.", icon="🚨", width="stretch")
+        else:
+            ok = start_session(s["session_id"])
+            if ok:
+                st.success("Session started.", icon="✅")
 
-html = (html
-        .replace("__TOKEN__", token)
-        .replace("__AVATAR_ID__", avatar_id)
-        .replace("__VOICE_ID__", voice_id)
-        .replace("__LINE1__", "Hello, how are you.")
-        .replace("__LINE2__", "Welcome to our restaurant.")
-        .replace("__LINE3__", "It is our pleasure serving you.")
-)
+st.divider()
 
-components.html(html, height=860, scrolling=True)
+# Speak / preview / keep-alive / stop
+line1 = "Hello, how are you."
+line2 = "Welcome to our restaurant."
+line3 = "It is our pleasure serving you."
 
+c1, c2, c3, c4 = st.columns(4)
+with c1:
+    if st.button("Speak: Line 1"):
+        s = st.session_state.session
+        if not s or not s.get("session_id"):
+            st.error("No active session. Create & start a session first.", icon="🚨", width="stretch")
+        else:
+            send_task(s["session_id"], line1)
+with c2:
+    if st.button("Speak: Line 2"):
+        s = st.session_state.session
+        if not s or not s.get("session_id"):
+            st.error("No active session. Create & start a session first.", icon="🚨", width="stretch")
+        else:
+            send_task(s["session_id"], line2)
+with c3:
+    if st.button("Speak: Line 3"):
+        s = st.session_state.session
+        if not s or not s.get("session_id"):
+            st.error("No active session. Create & start a session first.", icon="🚨", width="stretch")
+        else:
+            send_task(s["session_id"], line3)
+with c4:
+    if st.button("Preview Voice"):
+        s = st.session_state.session
+        if not s or not s.get("session_id"):
+            st.error("No active session. Create & start a session first.", icon="🚨", width="stretch")
+        else:
+            send_task(s["session_id"], "This is a quick voice preview from the selected avatar.")
+
+st.divider()
+
+k1, k2 = st.columns(2)
+with k1:
+    if st.button("Keep Alive (Ping)"):
+        keep_alive()
+with k2:
+    if st.button("Stop Session"):
+        s = st.session_state.session
+        if s and s.get("session_id"):
+            stop_session(s["session_id"])
+            st.session_state.session = None
+        else:
+            st.info("No active session to stop.")
+
+st.divider()
+
+# Current session status (streaming.list)
+st.subheader("Current Sessions (server view)")
+body = list_sessions()
+sessions = ((body.get("data") or {}).get("sessions") or [])
+if not sessions:
+    st.write("No active sessions.")
+else:
+    st.write(sessions)
+
+# Footer: show what we are tying to (for your records)
+s = st.session_state.session
+if s:
+    st.caption(f"Session: {s['session_id']} • Avatar: {s['avatar_id']} • Voice: {s['voice_id']}")
+    st.caption(f"Endpoint: {s['realtime_endpoint']} • URL: {s['url']}")
