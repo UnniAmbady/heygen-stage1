@@ -2,105 +2,133 @@
 <html>
   <head>
     <meta charset="utf-8" />
+    <title>HeyGen Streaming — Public Avatar</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; padding:16px; }
-      #wrap { display: grid; gap: 12px; max-width: 840px; margin: 0 auto; }
-      video { width: 100%; aspect-ratio: 16/9; background: #000; border-radius: 12px; }
-      .row { display: grid; gap: 8px; grid-template-columns: repeat(3, 1fr); }
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; padding:16px; background:#fff; }
+      #wrap { display:grid; gap:12px; max-width: 900px; margin: 0 auto; }
+      video { width: 100%; aspect-ratio: 16/9; background:#000; border-radius: 12px; }
+      .row { display:grid; gap:8px; grid-template-columns: repeat(3, 1fr); }
       button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ddd; cursor: pointer; }
-      button:disabled { opacity: 0.5; cursor: not-allowed; }
+      button:disabled { opacity: .6; cursor: not-allowed; }
       .muted { font-size: 12px; color: #666; }
-      #log { font: 12px/1.4 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; background:#f6f8fa; padding:8px; border:1px solid #e5e7eb; border-radius:8px; max-height:180px; overflow:auto; }
-      .toprow { display:flex; gap:8px; align-items:center; }
+      #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #e5e7eb; border-radius:8px; max-height:220px; overflow:auto; }
+      .toprow { display:flex; gap:8px; align-items:center; flex-wrap: wrap; }
+      .ok { color: #065f46; background: #ecfdf5; padding: 2px 8px; border-radius: 999px; border:1px solid #a7f3d0; }
+      .bad { color: #991b1b; background: #fef2f2; padding: 2px 8px; border-radius: 999px; border:1px solid #fecaca; }
     </style>
   </head>
   <body>
     <div id="wrap">
       <div class="toprow">
         <button id="unmuteBtn">Unmute audio</button>
-        <div class="muted" id="status">Initializing stream…</div>
+        <span id="status" class="muted">Initializing stream…</span>
+        <span id="net" class="muted"></span>
       </div>
+
       <video id="avatarVideo" autoplay playsinline muted></video>
+
       <div class="row">
         <button id="btn1" disabled>Say line 1</button>
         <button id="btn2" disabled>Say line 2</button>
         <button id="btn3" disabled>Say line 3</button>
       </div>
+
       <div id="log"></div>
     </div>
 
     <script type="module">
       import * as SDK from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar/+esm";
-      const StreamingAvatar  = SDK.StreamingAvatar;
-      const TaskType         = SDK.TaskType;
-      const StreamingEvents  = SDK.StreamingEvents;
+      const { StreamingAvatar, StreamingEvents, TaskType } = SDK;
 
-      // Values injected by Streamlit
-      const TOKEN        = "__TOKEN__";
-      const AVATARID     = "__AVATAR_ID__";     // we inject the first public avatar id
-      const VOICEID      = "__VOICE_ID__";
-      const LINE1        = "__LINE1__";
-      const LINE2        = "__LINE2__";
-      const LINE3        = "__LINE3__";
+      // Injected by Streamlit
+      const TOKEN    = "__TOKEN__";
+      const AVATARID = "__AVATAR_ID__";
+      const VOICEID  = "__VOICE_ID__";
+      const L1="__LINE1__", L2="__LINE2__", L3="__LINE3__";
 
       const videoEl  = document.getElementById('avatarVideo');
       const statusEl = document.getElementById('status');
-      const unmuteBtn= document.getElementById('unmuteBtn');
+      const unmute   = document.getElementById('unmuteBtn');
       const btns     = [document.getElementById('btn1'), document.getElementById('btn2'), document.getElementById('btn3')];
+      const netEl    = document.getElementById('net');
       const logEl    = document.getElementById('log');
-      const log = (...args) => { logEl.textContent += args.join(" ") + "\n"; logEl.scrollTop = logEl.scrollHeight; };
+      const log = (...a) => { logEl.textContent += a.join(" ") + "\n"; logEl.scrollTop = logEl.scrollHeight; };
 
-      window.addEventListener('error', e => log("window.error:", e.message));
-      window.addEventListener('unhandledrejection', e => log("unhandledrejection:", e.reason?.message || e.reason));
+      // Basic environment diagnostics
+      try {
+        const okRTC = !!window.RTCPeerConnection;
+        netEl.textContent = `RTC: ${okRTC ? "ok" : "missing"}`;
+        netEl.className = okRTC ? "ok" : "bad";
+      } catch {}
 
-      // Create client with token
-      const avatar = new StreamingAvatar(JSON.parse('{"token":"'+TOKEN+'"}'));
-      let sessionId = null;
+      // Create client
+      const avatar = new StreamingAvatar({ token: TOKEN });
 
-      unmuteBtn.addEventListener('click', async () => {
-        try { videoEl.muted = false; await videoEl.play(); unmuteBtn.disabled = true; unmuteBtn.textContent = "Audio unmuted"; }
-        catch (e) { log("unmute error:", e.message); }
-      });
-
+      // Stronger event diagnostics
       avatar.on(StreamingEvents.STREAM_READY, (evt) => {
-        log("STREAM_READY");
-        videoEl.srcObject = evt.detail;
-        statusEl.textContent = "Avatar is live. Click a button to speak.";
-        btns.forEach(b => b.disabled = false);
+        log("[EVENT] STREAM_READY");
+        try {
+          // Some SDK builds expose a helper; binding directly is safest
+          videoEl.srcObject = evt.detail;
+          statusEl.textContent = "Avatar is live — click a button to speak.";
+          btns.forEach(b => b.disabled = false);
+        } catch (e) {
+          log("attach video error:", e?.message || e);
+        }
       });
-      avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => log("STREAM_DISCONNECTED"));
-      avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; log("TALKING_START"); });
-      avatar.on(StreamingEvents.AVATAR_STOP_TALKING,  () => { statusEl.textContent = "Idle. Click again."; log("TALKING_STOP"); });
 
+      avatar.on(StreamingEvents.ERROR, (evt) => {
+        const err = evt?.detail || evt;
+        statusEl.textContent = "SDK error. See logs.";
+        log("[EVENT] ERROR:", typeof err === "string" ? err : JSON.stringify(err));
+      });
+
+      avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
+        log("[EVENT] STREAM_DISCONNECTED");
+        statusEl.textContent = "Disconnected.";
+      });
+
+      avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; log("[EVENT] START_TALKING"); });
+      avatar.on(StreamingEvents.AVATAR_STOP_TALKING,  () => { statusEl.textContent = "Idle."; log("[EVENT] STOP_TALKING"); });
+
+      // Some browsers require user gesture before audio plays
+      unmute.addEventListener('click', async () => {
+        try { videoEl.muted = false; await videoEl.play(); unmute.disabled = true; unmute.textContent = "Audio unmuted"; }
+        catch (e) { log("unmute error:", e?.message || e); }
+      });
+
+      // Start session (explicit options)
       (async () => {
         try {
-          // Always pass the public Interactive Avatar explicitly
-          const opts = { quality: "low", avatarId: AVATARID, voice: { voice_id: VOICEID } };
+          const opts = {
+            avatarId: AVATARID,
+            quality: "low",
+            voice: { voice_id: VOICEID }
+          };
           log("createStartAvatar opts:", JSON.stringify(opts));
           const res = await avatar.createStartAvatar(opts);
-          sessionId = res.session_id;
-          log("session_id:", sessionId);
-        } catch (err) {
-          console.error(err);
-          statusEl.textContent = "Failed to start session.";
-          log("createStartAvatar error:", err?.message || err);
+          log("createStartAvatar ->", JSON.stringify(res));
+        } catch (e) {
+          statusEl.textContent = "Failed to start avatar. See logs.";
+          log("createStartAvatar error:", e?.message || e);
         }
       })();
 
+      // Speak helper
       const speak = async (text) => {
         try {
-          const payload = JSON.parse('{"sessionId":"'+sessionId+'","text":"'+text+'","task_type":"REPEAT"}');
-          log("speak:", payload.text);
-          await avatar.speak(payload);
-        } catch (err) {
-          console.error(err);
+          log("speak:", text);
+          await avatar.speak({ task_type: TaskType.REPEAT, text });
+        } catch (e) {
           statusEl.textContent = "Speak failed.";
-          log("speak error:", err?.message || err);
+          log("speak error:", e?.message || e);
         }
       };
-      btns[0].addEventListener('click', () => speak(LINE1));
-      btns[1].addEventListener('click', () => speak(LINE2));
-      btns[2].addEventListener('click', () => speak(LINE3));
+
+      btns[0].addEventListener('click', () => speak(L1));
+      btns[1].addEventListener('click', () => speak(L2));
+      btns[2].addEventListener('click', () => speak(L3));
     </script>
   </body>
 </html>
