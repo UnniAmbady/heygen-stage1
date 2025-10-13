@@ -11,7 +11,7 @@ HEYGEN_BASE = "https://api.heygen.com/v1"
 def fetch_interactive_avatars():
     """Return a list of dicts: [{label, avatar_id, default_voice}] via streaming/avatar.list."""
     url = f"{HEYGEN_BASE}/streaming/avatar.list"
-    r = requests.get(url, headers={"accept": "application/json", "X-Api-Key": API_KEY}, timeout=600)
+    r = requests.get(url, headers={"accept": "application/json", "X-Api-Key": API_KEY}, timeout=30)
     r.raise_for_status()
     data = r.json().get("data") or []
     out = []
@@ -37,7 +37,7 @@ def create_streaming_token() -> str:
     r = requests.post(
         f"{HEYGEN_BASE}/streaming.create_token",
         headers={"X-Api-Key": API_KEY, "Accept": "application/json"},
-        timeout=600,
+        timeout=30,
     )
     r.raise_for_status()
     token = (r.json().get("data") or {}).get("token")
