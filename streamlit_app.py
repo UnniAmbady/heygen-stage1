@@ -14,50 +14,37 @@ HEADERS_GET  = {"accept": "application/json", "x-api-key": API_KEY}
 HEADERS_JSON = {"accept": "application/json", "content-type": "application/json", "x-api-key": API_KEY}
 HEADERS_NOBODY = {"accept": "application/json", "x-api-key": API_KEY}  # for keep_alive (no JSON body)
 
-# ---------------------------
-# Helpers: HTTP + banners
-# ---------------------------
+# ---------- HTTP helpers ----------
 def _post_json(url: str, payload: Dict[str, Any]) -> Tuple[int, Dict[str, Any], str]:
     r = requests.post(url, headers=HEADERS_JSON, json=payload, timeout=30)
-    try:
-        body = r.json()
-    except Exception:
-        body = {"raw": r.text}
+    try: body = r.json()
+    except Exception: body = {"raw": r.text}
     return r.status_code, body, r.text
 
 def _post_nobody(url: str) -> Tuple[int, Dict[str, Any], str]:
     r = requests.post(url, headers=HEADERS_NOBODY, timeout=30)  # NO BODY
-    try:
-        body = r.json()
-    except Exception:
-        body = {"raw": r.text}
+    try: body = r.json()
+    except Exception: body = {"raw": r.text}
     return r.status_code, body, r.text
 
 def _get(url: str) -> Tuple[int, Dict[str, Any], str]:
     r = requests.get(url, headers=HEADERS_GET, timeout=30)
-    try:
-        body = r.json()
-    except Exception:
-        body = {"raw": r.text}
+    try: body = r.json()
+    except Exception: body = {"raw": r.text}
     return r.status_code, body, r.text
 
 def banner_for_response(title: str, status: int, body: Dict[str, Any]) -> None:
-    """Show success on HTTP 200, error otherwise. Also surface api_code/message when present."""
     code = body.get("code")
     msg  = body.get("message") or body.get("error") or ""
     lines = [f"{title}",
              f"http_status: {status}",
              f"result: {'200 (success)' if status == 200 else '400/other (failure)'}"]
-    if code is not None:
-        lines.append(f"api_code: {code}")
-    if msg:
-        lines.append(f"api_message: {msg}")
+    if code is not None: lines.append(f"api_code: {code}")
+    if msg: lines.append(f"api_message: {msg}")
     txt = "\n".join(lines)
     (st.success if status == 200 else (lambda t: st.error(t, icon='🚨', width='stretch')))(txt)
 
-# ---------------------------
-# REST endpoints (exact per docs)
-# ---------------------------
+# ---------- REST endpoints ----------
 @st.cache_data(ttl=300)
 def fetch_interactive_avatars():
     status, body, _ = _get(f"{BASE}/streaming/avatar.list")
@@ -73,7 +60,6 @@ def fetch_interactive_avatars():
                 "preview": a.get("normal_preview"),
                 "is_public": a.get("is_public"),
             })
-    # dedupe
     seen, out = set(), []
     for it in items:
         aid = it["avatar_id"]
@@ -85,8 +71,7 @@ def fetch_interactive_avatars():
 def create_session_token() -> Optional[str]:
     status, body, _ = _post_json(f"{BASE}/streaming.create_token", {})
     banner_for_response("create_token", status, body)
-    if status != 200:
-        return None
+    if status != 200: return None
     return (body.get("data") or {}).get("token")
 
 def new_session() -> Optional[Dict[str, Any]]:
@@ -101,8 +86,7 @@ def new_session() -> Optional[Dict[str, Any]]:
     }
     status, body, _ = _post_json(f"{BASE}/streaming.new", payload)
     banner_for_response("streaming.new", status, body)
-    if status != 200:
-        return None
+    if status != 200: return None
     return body.get("data") or {}
 
 def start_session(session_id: str) -> bool:
@@ -130,23 +114,16 @@ def stop_session(session_id: str) -> bool:
     banner_for_response("streaming.stop", status, body)
     return status == 200
 
-# ---------------------------
-# State
-# ---------------------------
-if "session" not in st.session_state:
-    st.session_state.session = None
-if "avatar_selection" not in st.session_state:
-    st.session_state.avatar_selection = None
+# ---------- State ----------
+if "session" not in st.session_state: st.session_state.session = None
+if "avatar_selection" not in st.session_state: st.session_state.avatar_selection = None
 
-# ---------------------------
-# UI
-# ---------------------------
-st.title("🎥 HeyGen Streaming — Control Panel (REST) + Phone Viewer")
-st.caption("Use this page to create/start/stop sessions and send tasks. Open the phone-sized viewer in a popup.")
+# ---------- UI ----------
+st.title("🎥 HeyGen Streaming — Control Panel (REST) + Inline Phone Viewer")
+st.caption("Create/start/stop sessions and send tasks. A phone-sized viewer is embedded below.")
 
 avatars = fetch_interactive_avatars()
-if not avatars:
-    st.stop()
+if not avatars: st.stop()
 
 labels = [a["label"] for a in avatars]
 default_idx = 0 if st.session_state.avatar_selection is None else max(
@@ -159,7 +136,7 @@ avatar_id = chosen["avatar_id"]
 voice_id  = chosen["default_voice"]
 preview   = chosen["preview"]
 
-# If avatar changed → stop prior session
+# If avatar changed → stop old session
 if st.session_state.avatar_selection and st.session_state.avatar_selection != avatar_id:
     old = st.session_state.session
     if old and old.get("session_id"):
@@ -179,7 +156,6 @@ with col0:
     if st.button("Step 0: Create Token (diagnostic)"):
         tok = create_session_token()
         st.write("token length:", len(tok) if tok else 0)
-
 with col1:
     if st.button("Step 1: Create New Session"):
         data = new_session()
@@ -194,7 +170,6 @@ with col1:
                 "avatar_id": avatar_id,
                 "voice_id": voice_id,
             }
-
 with col2:
     if st.button("Step 2: Start Session"):
         s = st.session_state.session
@@ -203,7 +178,6 @@ with col2:
         else:
             if start_session(s["session_id"]):
                 st.success("Session started.", icon="✅")
-
 with col3:
     if st.button("Stop Session"):
         s = st.session_state.session
@@ -239,51 +213,82 @@ with c4:
 
 st.divider()
 
-# --- Phone-sized popup viewer ---
-st.subheader("Open Viewer (Phone-sized Pop-up)")
+# -------- Inline Viewer (phone-sized) ----------
+st.subheader("Inline Viewer (Phone frame)")
 
-# Create a fresh streaming token for the viewer so we don't expose API key client-side.
 viewer_token = create_session_token() or ""
-with open("client.html", "r", encoding="utf-8") as f:
-    client_html = f.read()
+viewer_html = f"""
+<!doctype html>
+<html>
+  <head>
+    <meta charset='utf-8' />
+    <meta name='viewport' content='width=device-width, initial-scale=1, viewport-fit=cover' />
+    <style>
+      html,body {{ height:100%; margin:0; background:#000; }}
+      #wrap {{ position:fixed; inset:0; display:grid; grid-template-rows:auto 1fr; width:420px; max-width:100%; height:760px; margin:auto; border-radius:22px; overflow:hidden; box-shadow:0 10px 30px rgba(0,0,0,.35); }}
+      #status {{ color:#bbb; font:14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding:8px 10px; background:#111; }}
+      video {{ width:100%; height:100%; object-fit:contain; background:#000; }}
+      #tap {{ position:absolute; right:12px; bottom:12px; color:#111; background:#fff; padding:6px 10px; border-radius:999px; font:12px system-ui; display:none; }}
+    </style>
+  </head>
+  <body>
+    <div id="wrap">
+      <div id="status">Connecting…</div>
+      <video id="v" autoplay playsinline muted></video>
+      <div id="tap">tap to unmute</div>
+    </div>
+    <script type="module">
+      import * as SDK from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar/+esm";
+      const {{ StreamingAvatar, StreamingEvents }} = SDK;
+      const TOKEN="{viewer_token}";
+      const AVATAR="{avatar_id}";
+      const VOICE="{voice_id}";
+      const v = document.getElementById('v');
+      const status = document.getElementById('status');
+      const tap = document.getElementById('tap');
+      const show = (t)=> status.textContent=t;
 
-client_html = (client_html
-               .replace("__TOKEN__", viewer_token)
-               .replace("__AVATAR_ID__", avatar_id)
-               .replace("__VOICE_ID__", voice_id))
+      const avatar = new StreamingAvatar({{ token: TOKEN }});
+      if (avatar.setVideoElement) {{ try {{ avatar.setVideoElement(v); }} catch(e) {{}} }}
 
-# Build a data URL to pass into a JS popup window.
-data_url = "data:text/html;base64," + base64.b64encode(client_html.encode("utf-8")).decode("ascii")
+      avatar.on(StreamingEvents.STREAM_READY, (evt) => {{
+        if (evt?.detail) v.srcObject = evt.detail;
+        show("Live");
+        tap.style.display = "inline-block";
+      }});
+      avatar.on(StreamingEvents.ERROR, (evt) => {{
+        const err = evt?.detail || evt; show("Error — see console"); console.error("SDK error:", err);
+      }});
+      avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => show("Disconnected"));
 
-popup_js = f"""
-<script>
-  function openAvatarPopup() {{
-    const w = 420, h = 760;
-    const left = window.screenX + Math.max(0, (window.outerWidth - w) / 2);
-    const top  = window.screenY + Math.max(0, (window.outerHeight - h) / 2);
-    const opts = `width=${{w}},height=${{h}},left=${{left}},top=${{top}},resizable=yes,menubar=no,toolbar=no,location=no,status=no`;
-    window.open("{data_url}", "heygen_viewer", opts);
-  }}
-</script>
-<button onclick="openAvatarPopup()" style="padding:10px 14px;border-radius:10px;border:1px solid #ddd;cursor:pointer;">Open Avatar Viewer (Phone)</button>
+      (async () => {{
+        try {{
+          await avatar.createStartAvatar({{ avatarId: AVATAR, quality: "low", voice: {{ voice_id: VOICE }} }});
+        }} catch(e) {{
+          show("Start failed"); console.error(e);
+        }}
+      }})();
+
+      const tryUnmute = async () => {{ try {{ v.muted=false; await v.play(); tap.style.display='none'; }} catch(e){{}} }};
+      tap.addEventListener('click', tryUnmute);
+      v.addEventListener('click', tryUnmute);
+      document.body.addEventListener('touchstart', tryUnmute, {{ once:true }});
+    </script>
+  </body>
+</html>
 """
-
-st.components.v1.html(popup_js, height=60)
+st.components.v1.html(viewer_html, height=800, scrolling=False)
 
 st.divider()
 
-# Current session list (server view)
+# Current sessions
 st.subheader("Current Sessions (server view)")
 body = list_sessions()
 sessions = ((body.get("data") or {}).get("sessions") or [])
-if not sessions:
-    st.write("No active sessions.")
-else:
-    st.write(sessions)
+st.write("No active sessions." if not sessions else sessions)
 
 # Footer
 s = st.session_state.session
 if s:
     st.caption(f"Session: {s['session_id']} • Avatar: {s['avatar_id']} • Voice: {s['voice_id']}")
     st.caption(f"Endpoint: {s['realtime_endpoint']} • URL: {s['url']}")
-
