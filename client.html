@@ -10,7 +10,6 @@
       video { width: 100%; aspect-ratio: 16/9; background:#000; border-radius: 12px; }
       .row { display:grid; gap:8px; grid-template-columns: repeat(3, 1fr); }
       button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ddd; cursor: pointer; }
-      button:disabled { opacity: .6; cursor: not-allowed; }
       .muted { font-size: 12px; color: #666; }
       #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #e5e7eb; border-radius:8px; max-height:300px; overflow:auto; }
       .pill { padding: 2px 8px; border-radius: 999px; border:1px solid #ddd; }
@@ -33,9 +32,10 @@
       <video id="avatarVideo" autoplay playsinline muted></video>
 
       <div class="row">
-        <button id="btn1" disabled>Say line 1</button>
-        <button id="btn2" disabled>Say line 2</button>
-        <button id="btn3" disabled>Say line 3</button>
+        <!-- Enabled immediately; we guard in JS if stream isn't ready -->
+        <button id="btn1">Say line 1</button>
+        <button id="btn2">Say line 2</button>
+        <button id="btn3">Say line 3</button>
       </div>
 
       <div id="log"></div>
@@ -53,7 +53,9 @@
 
       const videoEl  = document.getElementById('avatarVideo');
       const statusEl = document.getElementById('status');
-      const btns     = [document.getElementById('btn1'), document.getElementById('btn2'), document.getElementById('btn3')];
+      const btn1     = document.getElementById('btn1');
+      const btn2     = document.getElementById('btn2');
+      const btn3     = document.getElementById('btn3');
       const rtcEl    = document.getElementById('rtc');
       const tokEl    = document.getElementById('tok');
       const vstateEl = document.getElementById('vstate');
@@ -92,7 +94,6 @@
           try {
             if (evt?.detail) videoEl.srcObject = evt.detail;
             statusEl.textContent = "Avatar is live — click a button to speak.";
-            btns.forEach(b => b.disabled = false);
           } catch (e) {
             log("attach video error:", e?.message || e);
             statusEl.textContent = "Video attach failed. See logs.";
@@ -108,8 +109,8 @@
         avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
           log("[EVENT] STREAM_DISCONNECTED");
           statusEl.textContent = "Disconnected.";
-          btns.forEach(b => b.disabled = true);
           streamReady = false;
+          videoEl.srcObject = null;
         });
 
         avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; log("[EVENT] START_TALKING"); });
@@ -123,11 +124,7 @@
             try { avatar.setVideoElement(videoEl); } catch (e) { log("setVideoElement error:", e?.message || e); }
           }
           bindEvents();
-          const opts = {
-            avatarId: AVATARID,          // Interactive avatar
-            quality: "low",
-            voice: { voice_id: VOICEID } // from default_voice
-          };
+          const opts = { avatarId: AVATARID, quality: "low", voice: { voice_id: VOICEID } };
           log("createStartAvatar opts:", JSON.stringify(opts));
           const res = await avatar.createStartAvatar(opts);
           log("createStartAvatar ->", JSON.stringify(res));
@@ -152,7 +149,6 @@
       recBtn.addEventListener('click', async () => {
         try {
           statusEl.textContent = "Reconnecting…";
-          btns.forEach(b => b.disabled = true);
           streamReady = false;
           videoEl.srcObject = null;
           if (avatar && avatar.stop) { try { await avatar.stop(); } catch {} }
@@ -163,9 +159,10 @@
         }
       });
 
-      // Speak helper (auto-unmute on first click)
+      // Speak helper (auto-unmute on first click; guard if not ready)
       const speak = async (text) => {
         try {
+          if (!streamReady) { statusEl.textContent = "Stream not ready yet — trying to connect…"; log("speak blocked: stream not ready"); return; }
           if (!firstSpeakDone) { try { videoEl.muted = false; await videoEl.play(); } catch {} firstSpeakDone = true; }
           log("speak:", text);
           await avatar.speak({ task_type: TaskType.REPEAT, text });
@@ -174,9 +171,9 @@
           log("speak error:", e?.message || e);
         }
       };
-      document.getElementById('btn1').addEventListener('click', () => speak(L1));
-      document.getElementById('btn2').addEventListener('click', () => speak(L2));
-      document.getElementById('btn3').addEventListener('click', () => speak(L3));
+      btn1.addEventListener('click', () => speak(L1));
+      btn2.addEventListener('click', () => speak(L2));
+      btn3.addEventListener('click', () => speak(L3));
 
       // Mic (two-way)
       const enableMic = async () => {
