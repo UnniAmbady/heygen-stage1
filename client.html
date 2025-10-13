@@ -5,37 +5,38 @@
     <title>HeyGen Streaming — Interactive Avatar</title>
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <style>
+      :root { --pill-b:#ddd; --ok:#ecfdf5; --okb:#a7f3d0; --bad:#fef2f2; --badb:#fecaca; }
       body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; padding:16px; }
-      #wrap { display:grid; gap:12px; max-width: 900px; margin: 0 auto; }
-      video { width: 100%; aspect-ratio: 16/9; background:#000; border-radius: 12px; }
-      .row { display:grid; gap:8px; grid-template-columns: repeat(3, 1fr); }
-      button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ddd; cursor: pointer; }
-      .muted { font-size: 12px; color: #666; }
-      #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #e5e7eb; border-radius:8px; max-height:300px; overflow:auto; }
-      .pill { padding: 2px 8px; border-radius: 999px; border:1px solid #ddd; }
-      .ok  { color:#065f46; background:#ecfdf5; border-color:#a7f3d0; }
-      .bad { color:#991b1b; background:#fef2f2; border-color:#fecaca; }
-      .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+      #wrap { display:grid; gap:12px; max-width: 900px; margin: 0 auto; position:relative; z-index: 10; } /* ensure on top */
+      video { width: 100%; aspect-ratio: 16/9; background:#000; border-radius: 12px; position:relative; z-index: 1; }
+      .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; position:relative; z-index: 20; }
+      .row { display:grid; gap:12px; grid-template-columns: repeat(4, 1fr); position:relative; z-index: 20; } /* buttons on top */
+      button { padding: 12px 14px; border-radius: 14px; border: 2px solid #111; cursor: pointer; background:#fff; }
+      button:disabled { opacity: .6; cursor: not-allowed; }
+      #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #e5e7eb; border-radius:8px; max-height:300px; overflow:auto; position:relative; z-index: 20; }
+      .pill { padding: 2px 8px; border-radius: 999px; border:1px solid var(--pill-b); background:#fff; }
+      .ok  { color:#065f46; background:var(--ok); border-color:var(--okb); }
+      .bad { color:#991b1b; background:var(--bad); border-color:var(--badb); }
     </style>
   </head>
   <body>
     <div id="wrap">
-      <div class="controls muted">
+      <div class="controls">
         Status: <span id="status">Initializing stream…</span>
         <span id="rtc" class="pill">RTC: …</span>
         <span id="tok" class="pill">Token: …</span>
         <span id="vstate" class="pill">Video: …</span>
-        <button id="micBtn" class="pill">Mic: off</button>
-        <button id="reconnectBtn" class="pill">Reconnect</button>
+        <button id="micBtn" class="pill" style="border:1px solid var(--pill-b)">Mic: off</button>
+        <button id="reconnectBtn" class="pill" style="border:1px solid var(--pill-b)">Reconnect</button>
       </div>
 
       <video id="avatarVideo" autoplay playsinline muted></video>
 
       <div class="row">
-        <!-- Enabled immediately; we guard in JS if stream isn't ready -->
         <button id="btn1">Say line 1</button>
         <button id="btn2">Say line 2</button>
         <button id="btn3">Say line 3</button>
+        <button id="previewBtn">Preview voice</button>
       </div>
 
       <div id="log"></div>
@@ -51,17 +52,16 @@
       const VOICEID  = "__VOICE_ID__";
       const L1="__LINE1__", L2="__LINE2__", L3="__LINE3__";
 
-      const videoEl  = document.getElementById('avatarVideo');
-      const statusEl = document.getElementById('status');
-      const btn1     = document.getElementById('btn1');
-      const btn2     = document.getElementById('btn2');
-      const btn3     = document.getElementById('btn3');
-      const rtcEl    = document.getElementById('rtc');
-      const tokEl    = document.getElementById('tok');
-      const vstateEl = document.getElementById('vstate');
-      const micBtn   = document.getElementById('micBtn');
-      const recBtn   = document.getElementById('reconnectBtn');
-      const logEl    = document.getElementById('log');
+      const el = (id) => document.getElementById(id);
+      const videoEl  = el('avatarVideo');
+      const statusEl = el('status');
+      const rtcEl    = el('rtc');
+      const tokEl    = el('tok');
+      const vstateEl = el('vstate');
+      const micBtn   = el('micBtn');
+      const recBtn   = el('reconnectBtn');
+      const logEl    = el('log');
+
       const log = (...a) => { logEl.textContent += a.join(" ") + "\n"; logEl.scrollTop = logEl.scrollHeight; };
 
       // Diagnostics
@@ -73,13 +73,12 @@
 
       // Video readyState pulse
       const readyMap = { 0: "HAVE_NOTHING", 1: "HAVE_METADATA", 2: "HAVE_CURRENT_DATA", 3: "HAVE_FUTURE_DATA", 4: "HAVE_ENOUGH_DATA" };
-      const vTick = () => {
+      setInterval(() => {
         try {
           vstateEl.textContent = `Video: ${readyMap[videoEl.readyState] || videoEl.readyState}`;
           vstateEl.className = `pill ${videoEl.readyState >= 2 ? "ok" : "bad"}`;
         } catch {}
-      };
-      setInterval(vTick, 500);
+      }, 500);
 
       // Init SDK
       let avatar = null;
@@ -93,26 +92,23 @@
           log("[EVENT] STREAM_READY");
           try {
             if (evt?.detail) videoEl.srcObject = evt.detail;
-            statusEl.textContent = "Avatar is live — click a button to speak.";
+            statusEl.textContent = "Avatar is live — use the buttons to speak.";
           } catch (e) {
             log("attach video error:", e?.message || e);
             statusEl.textContent = "Video attach failed. See logs.";
           }
         });
-
         avatar.on(StreamingEvents.ERROR, (evt) => {
           const err = evt?.detail || evt;
           log("[EVENT] ERROR:", typeof err === "string" ? err : JSON.stringify(err));
           statusEl.textContent = "SDK error (see logs).";
         });
-
         avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
           log("[EVENT] STREAM_DISCONNECTED");
           statusEl.textContent = "Disconnected.";
           streamReady = false;
           videoEl.srcObject = null;
         });
-
         avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; log("[EVENT] START_TALKING"); });
         avatar.on(StreamingEvents.AVATAR_STOP_TALKING,  () => { statusEl.textContent = "Idle.";       log("[EVENT] STOP_TALKING"); });
       };
@@ -120,9 +116,7 @@
       const startSession = async () => {
         try {
           avatar = new StreamingAvatar({ token: TOKEN });
-          if (avatar.setVideoElement) {
-            try { avatar.setVideoElement(videoEl); } catch (e) { log("setVideoElement error:", e?.message || e); }
-          }
+          if (avatar.setVideoElement) { try { avatar.setVideoElement(videoEl); } catch (e) { log("setVideoElement error:", e?.message || e); } }
           bindEvents();
           const opts = { avatarId: AVATARID, quality: "low", voice: { voice_id: VOICEID } };
           log("createStartAvatar opts:", JSON.stringify(opts));
@@ -145,7 +139,35 @@
       // Kick off
       startSession();
 
-      // Reconnect button
+      // Robust click wiring (in case overlay interferes)
+      const speak = async (text) => {
+        try {
+          if (!streamReady) { statusEl.textContent = "Stream not ready yet — trying to connect…"; log("speak blocked: stream not ready"); return; }
+          if (!firstSpeakDone) { try { videoEl.muted = false; await videoEl.play(); } catch {} firstSpeakDone = true; }
+          log("speak:", text);
+          await avatar.speak({ task_type: TaskType.REPEAT, text });
+        } catch (e) {
+          statusEl.textContent = "Speak failed.";
+          log("speak error:", e?.message || e);
+        }
+      };
+
+      // Standard listeners
+      el('btn1').addEventListener('click', () => speak(L1));
+      el('btn2').addEventListener('click', () => speak(L2));
+      el('btn3').addEventListener('click', () => speak(L3));
+      el('previewBtn').addEventListener('click', () => speak("This is a quick voice preview from the selected avatar."));
+
+      // Fallback dispatcher: capture any click by id (handles rare overlay focus issues)
+      document.addEventListener('click', (e) => {
+        const id = e?.target?.id;
+        if (id === 'btn1') speak(L1);
+        else if (id === 'btn2') speak(L2);
+        else if (id === 'btn3') speak(L3);
+        else if (id === 'previewBtn') speak("This is a quick voice preview from the selected avatar.");
+      });
+
+      // Reconnect
       recBtn.addEventListener('click', async () => {
         try {
           statusEl.textContent = "Reconnecting…";
@@ -158,22 +180,6 @@
           statusEl.textContent = "Reconnect failed. See logs.";
         }
       });
-
-      // Speak helper (auto-unmute on first click; guard if not ready)
-      const speak = async (text) => {
-        try {
-          if (!streamReady) { statusEl.textContent = "Stream not ready yet — trying to connect…"; log("speak blocked: stream not ready"); return; }
-          if (!firstSpeakDone) { try { videoEl.muted = false; await videoEl.play(); } catch {} firstSpeakDone = true; }
-          log("speak:", text);
-          await avatar.speak({ task_type: TaskType.REPEAT, text });
-        } catch (e) {
-          statusEl.textContent = "Speak failed.";
-          log("speak error:", e?.message || e);
-        }
-      };
-      btn1.addEventListener('click', () => speak(L1));
-      btn2.addEventListener('click', () => speak(L2));
-      btn3.addEventListener('click', () => speak(L3));
 
       // Mic (two-way)
       const enableMic = async () => {
