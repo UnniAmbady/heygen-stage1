@@ -12,7 +12,7 @@
       button { padding: 10px 12px; border-radius: 10px; border: 1px solid #ddd; cursor: pointer; }
       button:disabled { opacity: .6; cursor: not-allowed; }
       .muted { font-size: 12px; color: #666; }
-      #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #e5e7eb; border-radius:8px; max-height:260px; overflow:auto; }
+      #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #e5e7eb; border-radius:8px; max-height:300px; overflow:auto; }
       .pill { padding: 2px 8px; border-radius: 999px; border:1px solid #ddd; }
       .ok  { color:#065f46; background:#ecfdf5; border-color:#a7f3d0; }
       .bad { color:#991b1b; background:#fef2f2; border-color:#fecaca; }
@@ -25,7 +25,9 @@
         Status: <span id="status">Initializing stream…</span>
         <span id="rtc" class="pill">RTC: …</span>
         <span id="tok" class="pill">Token: …</span>
+        <span id="vstate" class="pill">Video: …</span>
         <button id="micBtn" class="pill">Mic: off</button>
+        <button id="reconnectBtn" class="pill">Reconnect</button>
       </div>
 
       <video id="avatarVideo" autoplay playsinline muted></video>
@@ -43,7 +45,7 @@
       import * as SDK from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar/+esm";
       const { StreamingAvatar, StreamingEvents, TaskType } = SDK;
 
-      // Values injected by Streamlit
+      // Injected by Streamlit
       const TOKEN    = "__TOKEN__";
       const AVATARID = "__AVATAR_ID__";
       const VOICEID  = "__VOICE_ID__";
@@ -54,7 +56,9 @@
       const btns     = [document.getElementById('btn1'), document.getElementById('btn2'), document.getElementById('btn3')];
       const rtcEl    = document.getElementById('rtc');
       const tokEl    = document.getElementById('tok');
+      const vstateEl = document.getElementById('vstate');
       const micBtn   = document.getElementById('micBtn');
+      const recBtn   = document.getElementById('reconnectBtn');
       const logEl    = document.getElementById('log');
       const log = (...a) => { logEl.textContent += a.join(" ") + "\n"; logEl.scrollTop = logEl.scrollHeight; };
 
@@ -65,55 +69,60 @@
       tokEl.textContent = `Token: len=${(TOKEN||"").length}`;
       tokEl.className = `pill ${TOKEN && TOKEN.length>20 ? "ok":"bad"}`;
 
-      // Init SDK
-      const avatar = new StreamingAvatar({ token: TOKEN });
-      if (avatar.setVideoElement) {
-        try { avatar.setVideoElement(videoEl); } catch (e) { log("setVideoElement error:", e?.message || e); }
-      }
+      // Video readyState pulse
+      const readyMap = { 0: "HAVE_NOTHING", 1: "HAVE_METADATA", 2: "HAVE_CURRENT_DATA", 3: "HAVE_FUTURE_DATA", 4: "HAVE_ENOUGH_DATA" };
+      const vTick = () => {
+        try {
+          vstateEl.textContent = `Video: ${readyMap[videoEl.readyState] || videoEl.readyState}`;
+          vstateEl.className = `pill ${videoEl.readyState >= 2 ? "ok" : "bad"}`;
+        } catch {}
+      };
+      setInterval(vTick, 500);
 
+      // Init SDK
+      let avatar = null;
       let streamReady = false;
       let firstSpeakDone = false;
       let micOn = false, micStream = null;
 
-      // Watchdog
-      setTimeout(() => {
-        if (!streamReady) {
-          statusEl.textContent = "No stream after 3s — verify Interactive avatar, Streaming access, and network/WebRTC.";
-          log("[WATCHDOG] STREAM_READY not received within 3s.");
-        }
-      }, 3000);
+      const bindEvents = () => {
+        avatar.on(StreamingEvents.STREAM_READY, (evt) => {
+          streamReady = true;
+          log("[EVENT] STREAM_READY");
+          try {
+            if (evt?.detail) videoEl.srcObject = evt.detail;
+            statusEl.textContent = "Avatar is live — click a button to speak.";
+            btns.forEach(b => b.disabled = false);
+          } catch (e) {
+            log("attach video error:", e?.message || e);
+            statusEl.textContent = "Video attach failed. See logs.";
+          }
+        });
 
-      // Events
-      avatar.on(StreamingEvents.STREAM_READY, (evt) => {
-        streamReady = true;
-        log("[EVENT] STREAM_READY");
+        avatar.on(StreamingEvents.ERROR, (evt) => {
+          const err = evt?.detail || evt;
+          log("[EVENT] ERROR:", typeof err === "string" ? err : JSON.stringify(err));
+          statusEl.textContent = "SDK error (see logs).";
+        });
+
+        avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
+          log("[EVENT] STREAM_DISCONNECTED");
+          statusEl.textContent = "Disconnected.";
+          btns.forEach(b => b.disabled = true);
+          streamReady = false;
+        });
+
+        avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; log("[EVENT] START_TALKING"); });
+        avatar.on(StreamingEvents.AVATAR_STOP_TALKING,  () => { statusEl.textContent = "Idle.";       log("[EVENT] STOP_TALKING"); });
+      };
+
+      const startSession = async () => {
         try {
-          if (evt?.detail) videoEl.srcObject = evt.detail;
-          statusEl.textContent = "Avatar is live — click a button to speak.";
-          btns.forEach(b => b.disabled = false);
-        } catch (e) {
-          log("attach video error:", e?.message || e);
-          statusEl.textContent = "Video attach failed. See logs.";
-        }
-      });
-
-      avatar.on(StreamingEvents.ERROR, (evt) => {
-        const err = evt?.detail || evt;
-        log("[EVENT] ERROR:", typeof err === "string" ? err : JSON.stringify(err));
-        statusEl.textContent = "SDK error (see logs).";
-      });
-
-      avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
-        log("[EVENT] STREAM_DISCONNECTED");
-        statusEl.textContent = "Disconnected.";
-      });
-
-      avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; log("[EVENT] START_TALKING"); });
-      avatar.on(StreamingEvents.AVATAR_STOP_TALKING,  () => { statusEl.textContent = "Idle.";       log("[EVENT] STOP_TALKING"); });
-
-      // Start session
-      (async () => {
-        try {
+          avatar = new StreamingAvatar({ token: TOKEN });
+          if (avatar.setVideoElement) {
+            try { avatar.setVideoElement(videoEl); } catch (e) { log("setVideoElement error:", e?.message || e); }
+          }
+          bindEvents();
           const opts = {
             avatarId: AVATARID,          // Interactive avatar
             quality: "low",
@@ -126,7 +135,33 @@
           statusEl.textContent = "Failed to start avatar. See logs.";
           log("createStartAvatar error:", e?.message || e);
         }
-      })();
+      };
+
+      // 3s watchdog
+      setTimeout(() => {
+        if (!streamReady) {
+          statusEl.textContent = "No stream after 3s — verify Interactive avatar, Streaming access, and network/WebRTC.";
+          log("[WATCHDOG] STREAM_READY not received within 3s.");
+        }
+      }, 3000);
+
+      // Kick off
+      startSession();
+
+      // Reconnect button
+      recBtn.addEventListener('click', async () => {
+        try {
+          statusEl.textContent = "Reconnecting…";
+          btns.forEach(b => b.disabled = true);
+          streamReady = false;
+          videoEl.srcObject = null;
+          if (avatar && avatar.stop) { try { await avatar.stop(); } catch {} }
+          await startSession();
+        } catch (e) {
+          log("reconnect error:", e?.message || e);
+          statusEl.textContent = "Reconnect failed. See logs.";
+        }
+      });
 
       // Speak helper (auto-unmute on first click)
       const speak = async (text) => {
@@ -139,9 +174,9 @@
           log("speak error:", e?.message || e);
         }
       };
-      btns[0].addEventListener('click', () => speak(L1));
-      btns[1].addEventListener('click', () => speak(L2));
-      btns[2].addEventListener('click', () => speak(L3));
+      document.getElementById('btn1').addEventListener('click', () => speak(L1));
+      document.getElementById('btn2').addEventListener('click', () => speak(L2));
+      document.getElementById('btn3').addEventListener('click', () => speak(L3));
 
       // Mic (two-way)
       const enableMic = async () => {
@@ -165,7 +200,7 @@
       };
       const disableMic = () => {
         try { if (micStream) micStream.getTracks().forEach(t => t.stop()); } catch {}
-        if (avatar.setMicrophoneEnabled) avatar.setMicrophoneEnabled(false);
+        if (avatar?.setMicrophoneEnabled) avatar.setMicrophoneEnabled(false);
         micOn = false;
         micBtn.textContent = "Mic: off";
         micBtn.className = "pill";
