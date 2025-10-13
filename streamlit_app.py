@@ -61,7 +61,7 @@ def interpret_avatar_list(payload: dict, avatars: list[dict]) -> str:
     """Human-friendly interpretation for /streaming/avatar.list."""
     lines = []
     code = payload.get("code")
-    lines.append(f"code: {code!r}")
+    lines.append(f"code (avatar.list): {code!r}  • expected: 100")
 
     data = payload.get("data")
     if not isinstance(data, list):
@@ -117,26 +117,28 @@ def interpret_avatar_list(payload: dict, avatars: list[dict]) -> str:
 def interpret_token(payload: dict) -> str:
     """Human-friendly interpretation for /streaming.create_token."""
     lines = []
-    code = payload.get("code")
-    lines.append(f"code: {code!r}")
+    real_code = payload.get("code", None)
+    assumed_code = 100 if real_code is None else real_code
+    lines.append(f"code (create_token): {real_code!r}  • assumed_code: {assumed_code} (token endpoint may omit code)")
+
     data = payload.get("data") or {}
     token = data.get("token", "")
     lines.append(f"token length: {len(token)}")
-    # Echo last 6 chars as a sanity check (avoid leaking full token)
     if token:
         lines.append(f"token suffix: …{token[-6:]}")
-    # Some APIs include expiry/issued-at; if present, surface them
     for key in ("issued_at", "expires_at", "ttl", "region"):
         if key in data:
             lines.append(f"{key}: {data.get(key)}")
+    if real_code is None:
+        lines.append("note: response omitted 'code'; treating as success since token is present.")
     return "\n".join(lines)
 
 # ---------- UI ----------
 
 st.title("🎥 HeyGen Streaming Avatar — Interactive (Diagnostics On)")
-st.caption("Dropdown is populated via API. Voice comes from avatar’s default_voice. Both API response bodies are interpreted below.")
+st.caption("Dropdown via API. Voice = avatar.default_voice. Interpretation panels below show raw-response health.")
 
-# 1) Load avatars list
+# 1) Load avatar list
 with st.spinner("Loading Interactive Avatars…"):
     avatars, raw_avatar_payload = fetch_interactive_avatars()
 
@@ -154,9 +156,9 @@ chosen = next(a for a in avatars if a["label"] == label)
 avatar_id = chosen["avatar_id"]
 voice_id = chosen["default_voice"] or "f38a635bee7a4d1f9b0a654a31d050d2"  # fallback
 
-# Optional: show preview
+# Optional: preview image (no deprecation warning)
 if chosen.get("normal_preview"):
-    st.image(chosen["normal_preview"], caption=f"Preview • {label}", use_column_width=True)
+    st.image(chosen["normal_preview"], caption=f"Preview • {label}", use_container_width=True)
 
 # 3) Create token
 with st.spinner("Creating streaming token…"):
@@ -182,3 +184,4 @@ html = (html
 )
 
 components.html(html, height=860, scrolling=True)
+
