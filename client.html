@@ -26,7 +26,7 @@
         <span id="tok" class="pill">Token: …</span>
       </div>
 
-      <!-- Start muted; we auto-unmute on first speak click -->
+      <!-- Start muted; auto-unmute on first "Speak" click -->
       <video id="avatarVideo" autoplay playsinline muted></video>
 
       <div class="row">
@@ -63,8 +63,11 @@
       tokEl.textContent = `Token: len=${TOKEN.length}`;
       tokEl.className = `pill ${TOKEN.length>20 ? "ok":"bad"}`;
 
-      // Create client
+      // Create client and bind video element (required in some SDK builds)
       const avatar = new StreamingAvatar({ token: TOKEN });
+      if (avatar.setVideoElement) {
+        try { avatar.setVideoElement(videoEl); } catch (e) { log("setVideoElement error:", e?.message || e); }
+      }
 
       let streamReady = false;
       let firstSpeakDone = false;
@@ -72,7 +75,7 @@
       // 3s watchdog: if STREAM_READY doesn't arrive, warn loudly
       setTimeout(() => {
         if (!streamReady) {
-          statusEl.textContent = "No stream after 3s — check that the avatar is Interactive and streaming is enabled on your account.";
+          statusEl.textContent = "No stream after 3s — verify: (1) avatar is Interactive, (2) streaming is enabled on your plan, (3) network allows WebRTC.";
           log("[WATCHDOG] STREAM_READY not received within 3s.");
         }
       }, 3000);
@@ -81,7 +84,8 @@
         streamReady = true;
         log("[EVENT] STREAM_READY");
         try {
-          videoEl.srcObject = evt.detail; // Attach MediaStream
+          // Attach MediaStream (works whether or not setVideoElement was used)
+          if (evt?.detail) videoEl.srcObject = evt.detail;
           statusEl.textContent = "Avatar is live — click a button to speak.";
           btns.forEach(b => b.disabled = false);
         } catch (e) {
