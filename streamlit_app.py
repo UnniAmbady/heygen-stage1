@@ -3,7 +3,6 @@ import requests
 import streamlit as st
 import streamlit.components.v1 as components
 from pathlib import Path
-from urllib.parse import quote
 
 st.set_page_config(page_title="HeyGen — Realtime Avatar (Public)", page_icon="🎥", layout="centered")
 
@@ -17,7 +16,7 @@ def read_first_public_avatar_id():
         return ""
 
 PUBLIC_AVATAR_ID = read_first_public_avatar_id()
-VOICE_ID = "f38a635bee7a4d1f9b0a654a31d050d2"  # “Mark”
+VOICE_ID = "f38a635bee7a4d1f9b0a654a31d050d2"  # Mark (Interactive-compatible)
 
 def create_streaming_token() -> str:
     r = requests.post(
@@ -31,14 +30,14 @@ def create_streaming_token() -> str:
         raise RuntimeError(f"No token in response: {r.text}")
     return token
 
-st.title("🎥 HeyGen Streaming Avatar — Live Proof (Public Interactive Avatar)")
-st.caption("Uses a public Interactive Avatar (first item in your JSON).")
+st.title("🎥 HeyGen Streaming Avatar — Public Interactive Avatar")
+st.caption("Uses the first public Interactive Avatar from your JSON.")
 
 token = create_streaming_token()
-st.info(f"Token prefix: {token[:8]}…  (streaming token created)")
+st.info(f"Token received (len={len(token)}). Prefix: {token[:8]}…")
 st.success(f"Using public avatar: {PUBLIC_AVATAR_ID or '<<not found>>'}")
 
-# Load HTML shell and inject runtime values (kept as a separate file as requested)
+# Inject runtime values into the static HTML shell
 html = (Path(__file__).parent / "client.html").read_text(encoding="utf-8")
 html = (html
         .replace("__TOKEN__", token)
@@ -49,9 +48,4 @@ html = (html
         .replace("__LINE3__", "It is our pleasure serving you.")
 )
 
-# Provide an “open in new tab” button in case the Streamlit iframe blocks WebRTC
-data_url = "data:text/html;charset=utf-8," + quote(html)
-st.link_button("🔗 Open client in a new tab (bypass iframe)", data_url)
-
 components.html(html, height=760, scrolling=True)
-
