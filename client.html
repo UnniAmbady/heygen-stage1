@@ -28,7 +28,6 @@
         <button id="micBtn" class="pill">Mic: off</button>
       </div>
 
-      <!-- Start muted; auto-unmute on first Speak click -->
       <video id="avatarVideo" autoplay playsinline muted></video>
 
       <div class="row">
@@ -44,7 +43,7 @@
       import * as SDK from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar/+esm";
       const { StreamingAvatar, StreamingEvents, TaskType } = SDK;
 
-      // Injected by Streamlit
+      // Values injected by Streamlit
       const TOKEN    = "__TOKEN__";
       const AVATARID = "__AVATAR_ID__";
       const VOICEID  = "__VOICE_ID__";
@@ -89,7 +88,6 @@
         streamReady = true;
         log("[EVENT] STREAM_READY");
         try {
-          // Attach stream (works even if setVideoElement was called)
           if (evt?.detail) videoEl.srcObject = evt.detail;
           statusEl.textContent = "Avatar is live — click a button to speak.";
           btns.forEach(b => b.disabled = false);
@@ -117,9 +115,9 @@
       (async () => {
         try {
           const opts = {
-            avatarId: AVATARID,          // must be Interactive
+            avatarId: AVATARID,          // Interactive avatar
             quality: "low",
-            voice: { voice_id: VOICEID }
+            voice: { voice_id: VOICEID } // from default_voice
           };
           log("createStartAvatar opts:", JSON.stringify(opts));
           const res = await avatar.createStartAvatar(opts);
@@ -166,9 +164,7 @@
         }
       };
       const disableMic = () => {
-        try {
-          if (micStream) micStream.getTracks().forEach(t => t.stop());
-        } catch {}
+        try { if (micStream) micStream.getTracks().forEach(t => t.stop()); } catch {}
         if (avatar.setMicrophoneEnabled) avatar.setMicrophoneEnabled(false);
         micOn = false;
         micBtn.textContent = "Mic: off";
