@@ -45,24 +45,20 @@ def fetch_interactive_avatars():
     return deduped, payload
 
 
-def create_streaming_token() -> str:
-    r = requests.post(
-        f"{HEYGEN_BASE}/streaming.create_token",
-        headers={"X-Api-Key": API_KEY, "Accept": "application/json"},
-        timeout=30,
-    )
+def create_streaming_token():
+    """Return (token, payload_dict) for interpretation."""
+    url = f"{HEYGEN_BASE}/streaming.create_token"
+    r = requests.post(url, headers={"X-Api-Key": API_KEY, "Accept": "application/json"}, timeout=30)
     r.raise_for_status()
-    token = (r.json().get("data") or {}).get("token")
+    payload = r.json() if r.headers.get("content-type","").startswith("application/json") else {"raw": r.text}
+    token = (payload.get("data") or {}).get("token")
     if not token:
         raise RuntimeError(f"No token in response: {r.text}")
-    return token
+    return token, payload
 
 
 def interpret_avatar_list(payload: dict, avatars: list[dict]) -> str:
-    """
-    Build a human-friendly interpretation of the /streaming/avatar.list response body.
-    Shown with st.error(..., width="stretch") for visibility.
-    """
+    """Human-friendly interpretation for /streaming/avatar.list."""
     lines = []
     code = payload.get("code")
     lines.append(f"code: {code!r}")
@@ -75,7 +71,6 @@ def interpret_avatar_list(payload: dict, avatars: list[dict]) -> str:
     total = len(data)
     lines.append(f"data: list with {total} item(s)")
 
-    # Status breakdown
     by_status = {}
     for a in data:
         s = a.get("status", "<none>")
@@ -83,18 +78,15 @@ def interpret_avatar_list(payload: dict, avatars: list[dict]) -> str:
     status_summary = ", ".join([f"{k}: {v}" for k, v in by_status.items()])
     lines.append(f"status breakdown: {status_summary or '<none>'}")
 
-    # Public vs. private
     pub = sum(1 for a in data if a.get("is_public"))
     prv = total - pub
     lines.append(f"public: {pub}, private: {prv}")
 
-    # Fields health
     missing_avatar_id = sum(1 for a in data if not a.get("avatar_id"))
     missing_pose_name = sum(1 for a in data if not a.get("pose_name"))
     missing_default_voice = sum(1 for a in data if not a.get("default_voice"))
     lines.append(f"missing avatar_id: {missing_avatar_id}, pose_name: {missing_pose_name}, default_voice: {missing_default_voice}")
 
-    # First ACTIVE item preview
     first_active = next((a for a in data if a.get("status") == "ACTIVE"), None)
     if first_active:
         lines.append("first ACTIVE item:")
@@ -106,13 +98,11 @@ def interpret_avatar_list(payload: dict, avatars: list[dict]) -> str:
     else:
         lines.append("⚠️ no ACTIVE items found")
 
-    # Compare raw->prepared list
     if avatars:
         lines.append(f"prepared dropdown options: {len(avatars)} (deduplicated by avatar_id)")
     else:
         lines.append("⚠️ prepared dropdown has no items (likely all missing avatar_id or filtered)")
 
-    # Optional: echo first few raw objects (minified keys) for quick glance
     preview_count = min(3, total)
     if preview_count:
         lines.append("sample items (trimmed):")
@@ -123,22 +113,40 @@ def interpret_avatar_list(payload: dict, avatars: list[dict]) -> str:
             )
     return "\n".join(lines)
 
+
+def interpret_token(payload: dict) -> str:
+    """Human-friendly interpretation for /streaming.create_token."""
+    lines = []
+    code = payload.get("code")
+    lines.append(f"code: {code!r}")
+    data = payload.get("data") or {}
+    token = data.get("token", "")
+    lines.append(f"token length: {len(token)}")
+    # Echo last 6 chars as a sanity check (avoid leaking full token)
+    if token:
+        lines.append(f"token suffix: …{token[-6:]}")
+    # Some APIs include expiry/issued-at; if present, surface them
+    for key in ("issued_at", "expires_at", "ttl", "region"):
+        if key in data:
+            lines.append(f"{key}: {data.get(key)}")
+    return "\n".join(lines)
+
 # ---------- UI ----------
 
-st.title("🎥 HeyGen Streaming Avatar — Interactive (Live)")
-st.caption("Avatars are loaded via API. Voice auto-selected from each avatar’s default_voice. Includes response-body interpretation for debugging.")
+st.title("🎥 HeyGen Streaming Avatar — Interactive (Diagnostics On)")
+st.caption("Dropdown is populated via API. Voice comes from avatar’s default_voice. Both API response bodies are interpreted below.")
 
-# Load avatar list
-with st.spinner("Loading available Interactive Avatars…"):
-    avatars, raw_payload = fetch_interactive_avatars()
+# 1) Load avatars list
+with st.spinner("Loading Interactive Avatars…"):
+    avatars, raw_avatar_payload = fetch_interactive_avatars()
 
-# NEW: Display interpretation of the Response Body as an alert panel
-interp = interpret_avatar_list(raw_payload, avatars)
-st.error(interp, icon="🧭", width="stretch")
+interp_avatars = interpret_avatar_list(raw_avatar_payload, avatars)
+st.error(interp_avatars, icon="🧭", width="stretch")
 
 if not avatars:
     st.stop()
 
+# 2) Choose avatar
 labels = [a["label"] for a in avatars]
 idx = 0
 label = st.selectbox("Choose an Interactive Avatar:", labels, index=idx)
@@ -146,12 +154,21 @@ chosen = next(a for a in avatars if a["label"] == label)
 avatar_id = chosen["avatar_id"]
 voice_id = chosen["default_voice"] or "f38a635bee7a4d1f9b0a654a31d050d2"  # fallback
 
-# Create token
-token = create_streaming_token()
-st.info(f"Token OK (len={len(token)}). Prefix: {token[:8]}…")
-st.success(f"Using avatar: {label}  •  id: {avatar_id}  •  voice: {voice_id[:8]}…")
+# Optional: show preview
+if chosen.get("normal_preview"):
+    st.image(chosen["normal_preview"], caption=f"Preview • {label}", use_column_width=True)
 
-# Inject values into client
+# 3) Create token
+with st.spinner("Creating streaming token…"):
+    token, raw_token_payload = create_streaming_token()
+
+interp_token = interpret_token(raw_token_payload)
+st.error(interp_token, icon="🔐", width="stretch")
+
+st.success(f"Using avatar: {label}  •  id: {avatar_id}  •  voice: {voice_id[:8]}…")
+st.info(f"Token OK (len={len(token)}). Prefix: {token[:8]}…")
+
+# 4) Inject values into the HTML client
 with open("client.html", "r", encoding="utf-8") as f:
     html = f.read()
 
@@ -164,4 +181,4 @@ html = (html
         .replace("__LINE3__", "It is our pleasure serving you.")
 )
 
-components.html(html, height=820, scrolling=True)
+components.html(html, height=860, scrolling=True)
