@@ -35,9 +35,9 @@
       const TaskType         = SDK.TaskType;
       const StreamingEvents  = SDK.StreamingEvents;
 
-      // Values injected by Streamlit (simple .replace() in Python)
+      // Values injected by Streamlit
       const TOKEN        = "__TOKEN__";
-      const AVATARID     = "__AVATAR_ID__";     // may be empty => use public default
+      const AVATARID     = "__AVATAR_ID__";     // we inject the first public avatar id
       const VOICEID      = "__VOICE_ID__";
       const LINE1        = "__LINE1__";
       const LINE2        = "__LINE2__";
@@ -53,7 +53,7 @@
       window.addEventListener('error', e => log("window.error:", e.message));
       window.addEventListener('unhandledrejection', e => log("unhandledrejection:", e.reason?.message || e.reason));
 
-      // Create client with token (avoid object literal so Python never formats braces)
+      // Create client with token
       const avatar = new StreamingAvatar(JSON.parse('{"token":"'+TOKEN+'"}'));
       let sessionId = null;
 
@@ -74,9 +74,8 @@
 
       (async () => {
         try {
-          // If AVATARID is empty, omit it => SDK uses a public streaming avatar.
-          const base = { quality: "low", voice: { voice_id: VOICEID } };
-          const opts = AVATARID ? { ...base, avatarId: AVATARID } : base;
+          // Always pass the public Interactive Avatar explicitly
+          const opts = { quality: "low", avatarId: AVATARID, voice: { voice_id: VOICEID } };
           log("createStartAvatar opts:", JSON.stringify(opts));
           const res = await avatar.createStartAvatar(opts);
           sessionId = res.session_id;
