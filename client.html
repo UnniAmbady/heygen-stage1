@@ -2,214 +2,68 @@
 <html>
   <head>
     <meta charset="utf-8" />
-    <title>HeyGen Streaming — Interactive Avatar</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HeyGen Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <style>
-      :root { --pill-b:#ddd; --ok:#ecfdf5; --okb:#a7f3d0; --bad:#fef2f2; --badb:#fecaca; }
-      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin:0; padding:16px; }
-      #wrap { display:grid; gap:12px; max-width: 900px; margin: 0 auto; position:relative; z-index: 10; } /* ensure on top */
-      video { width: 100%; aspect-ratio: 16/9; background:#000; border-radius: 12px; position:relative; z-index: 1; }
-      .controls { display:flex; gap:8px; flex-wrap:wrap; align-items:center; position:relative; z-index: 20; }
-      .row { display:grid; gap:12px; grid-template-columns: repeat(4, 1fr); position:relative; z-index: 20; } /* buttons on top */
-      button { padding: 12px 14px; border-radius: 14px; border: 2px solid #111; cursor: pointer; background:#fff; }
-      button:disabled { opacity: .6; cursor: not-allowed; }
-      #log { font: 12px/1.45 ui-monospace, Menlo, Consolas, monospace; white-space: pre-wrap; background:#f6f8fa; padding:10px; border:1px solid #e5e7eb; border-radius:8px; max-height:300px; overflow:auto; position:relative; z-index: 20; }
-      .pill { padding: 2px 8px; border-radius: 999px; border:1px solid var(--pill-b); background:#fff; }
-      .ok  { color:#065f46; background:var(--ok); border-color:var(--okb); }
-      .bad { color:#991b1b; background:var(--bad); border-color:var(--badb); }
+      html,body { height:100%; margin:0; background:#000; }
+      #wrap { position:fixed; inset:0; display:grid; grid-template-rows:auto 1fr; }
+      #status { color:#bbb; font:14px/1.2 system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; padding:8px 10px; background:#111; }
+      video { width:100%; height:100%; object-fit:contain; background:#000; }
+      #tap { position:absolute; inset:auto 12px 12px auto; color:#111; background:#fff; padding:6px 10px; border-radius:999px; font:12px system-ui; display:none; }
     </style>
   </head>
   <body>
     <div id="wrap">
-      <div class="controls">
-        Status: <span id="status">Initializing stream…</span>
-        <span id="rtc" class="pill">RTC: …</span>
-        <span id="tok" class="pill">Token: …</span>
-        <span id="vstate" class="pill">Video: …</span>
-        <button id="micBtn" class="pill" style="border:1px solid var(--pill-b)">Mic: off</button>
-        <button id="reconnectBtn" class="pill" style="border:1px solid var(--pill-b)">Reconnect</button>
-      </div>
-
-      <video id="avatarVideo" autoplay playsinline muted></video>
-
-      <div class="row">
-        <button id="btn1">Say line 1</button>
-        <button id="btn2">Say line 2</button>
-        <button id="btn3">Say line 3</button>
-        <button id="previewBtn">Preview voice</button>
-      </div>
-
-      <div id="log"></div>
+      <div id="status">Connecting…</div>
+      <video id="v" autoplay playsinline muted></video>
+      <div id="tap">tap to unmute</div>
     </div>
 
     <script type="module">
       import * as SDK from "https://cdn.jsdelivr.net/npm/@heygen/streaming-avatar/+esm";
-      const { StreamingAvatar, StreamingEvents, TaskType } = SDK;
+      const { StreamingAvatar, StreamingEvents } = SDK;
 
-      // Injected by Streamlit
       const TOKEN    = "__TOKEN__";
       const AVATARID = "__AVATAR_ID__";
       const VOICEID  = "__VOICE_ID__";
-      const L1="__LINE1__", L2="__LINE2__", L3="__LINE3__";
 
-      const el = (id) => document.getElementById(id);
-      const videoEl  = el('avatarVideo');
-      const statusEl = el('status');
-      const rtcEl    = el('rtc');
-      const tokEl    = el('tok');
-      const vstateEl = el('vstate');
-      const micBtn   = el('micBtn');
-      const recBtn   = el('reconnectBtn');
-      const logEl    = el('log');
+      const v = document.getElementById('v');
+      const status = document.getElementById('status');
+      const tap = document.getElementById('tap');
 
-      const log = (...a) => { logEl.textContent += a.join(" ") + "\n"; logEl.scrollTop = logEl.scrollHeight; };
+      const avatar = new StreamingAvatar({ token: TOKEN });
+      if (avatar.setVideoElement) { try { avatar.setVideoElement(v); } catch(e){} }
 
-      // Diagnostics
-      const hasRTC = !!window.RTCPeerConnection;
-      rtcEl.textContent = `RTC: ${hasRTC ? "ok" : "missing"}`;
-      rtcEl.className = `pill ${hasRTC ? "ok":"bad"}`;
-      tokEl.textContent = `Token: len=${(TOKEN||"").length}`;
-      tokEl.className = `pill ${TOKEN && TOKEN.length>20 ? "ok":"bad"}`;
+      const show = (t) => status.textContent = t;
 
-      // Video readyState pulse
-      const readyMap = { 0: "HAVE_NOTHING", 1: "HAVE_METADATA", 2: "HAVE_CURRENT_DATA", 3: "HAVE_FUTURE_DATA", 4: "HAVE_ENOUGH_DATA" };
-      setInterval(() => {
+      avatar.on(StreamingEvents.STREAM_READY, (evt) => {
+        if (evt?.detail) v.srcObject = evt.detail;
+        show("Live");
+        tap.style.display = "inline-block";
+      });
+      avatar.on(StreamingEvents.ERROR, (evt) => {
+        const err = evt?.detail || evt;
+        show("Error — see console");
+        console.error("SDK error:", err);
+      });
+      avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => show("Disconnected"));
+
+      // Start the avatar stream with given avatar & voice
+      (async () => {
         try {
-          vstateEl.textContent = `Video: ${readyMap[videoEl.readyState] || videoEl.readyState}`;
-          vstateEl.className = `pill ${videoEl.readyState >= 2 ? "ok" : "bad"}`;
-        } catch {}
-      }, 500);
-
-      // Init SDK
-      let avatar = null;
-      let streamReady = false;
-      let firstSpeakDone = false;
-      let micOn = false, micStream = null;
-
-      const bindEvents = () => {
-        avatar.on(StreamingEvents.STREAM_READY, (evt) => {
-          streamReady = true;
-          log("[EVENT] STREAM_READY");
-          try {
-            if (evt?.detail) videoEl.srcObject = evt.detail;
-            statusEl.textContent = "Avatar is live — use the buttons to speak.";
-          } catch (e) {
-            log("attach video error:", e?.message || e);
-            statusEl.textContent = "Video attach failed. See logs.";
-          }
-        });
-        avatar.on(StreamingEvents.ERROR, (evt) => {
-          const err = evt?.detail || evt;
-          log("[EVENT] ERROR:", typeof err === "string" ? err : JSON.stringify(err));
-          statusEl.textContent = "SDK error (see logs).";
-        });
-        avatar.on(StreamingEvents.STREAM_DISCONNECTED, () => {
-          log("[EVENT] STREAM_DISCONNECTED");
-          statusEl.textContent = "Disconnected.";
-          streamReady = false;
-          videoEl.srcObject = null;
-        });
-        avatar.on(StreamingEvents.AVATAR_START_TALKING, () => { statusEl.textContent = "Speaking…"; log("[EVENT] START_TALKING"); });
-        avatar.on(StreamingEvents.AVATAR_STOP_TALKING,  () => { statusEl.textContent = "Idle.";       log("[EVENT] STOP_TALKING"); });
-      };
-
-      const startSession = async () => {
-        try {
-          avatar = new StreamingAvatar({ token: TOKEN });
-          if (avatar.setVideoElement) { try { avatar.setVideoElement(videoEl); } catch (e) { log("setVideoElement error:", e?.message || e); } }
-          bindEvents();
           const opts = { avatarId: AVATARID, quality: "low", voice: { voice_id: VOICEID } };
-          log("createStartAvatar opts:", JSON.stringify(opts));
-          const res = await avatar.createStartAvatar(opts);
-          log("createStartAvatar ->", JSON.stringify(res));
+          await avatar.createStartAvatar(opts);
         } catch (e) {
-          statusEl.textContent = "Failed to start avatar. See logs.";
-          log("createStartAvatar error:", e?.message || e);
+          show("Start failed");
+          console.error(e);
         }
-      };
+      })();
 
-      // 3s watchdog
-      setTimeout(() => {
-        if (!streamReady) {
-          statusEl.textContent = "No stream after 3s — verify Interactive avatar, Streaming access, and network/WebRTC.";
-          log("[WATCHDOG] STREAM_READY not received within 3s.");
-        }
-      }, 3000);
-
-      // Kick off
-      startSession();
-
-      // Robust click wiring (in case overlay interferes)
-      const speak = async (text) => {
-        try {
-          if (!streamReady) { statusEl.textContent = "Stream not ready yet — trying to connect…"; log("speak blocked: stream not ready"); return; }
-          if (!firstSpeakDone) { try { videoEl.muted = false; await videoEl.play(); } catch {} firstSpeakDone = true; }
-          log("speak:", text);
-          await avatar.speak({ task_type: TaskType.REPEAT, text });
-        } catch (e) {
-          statusEl.textContent = "Speak failed.";
-          log("speak error:", e?.message || e);
-        }
-      };
-
-      // Standard listeners
-      el('btn1').addEventListener('click', () => speak(L1));
-      el('btn2').addEventListener('click', () => speak(L2));
-      el('btn3').addEventListener('click', () => speak(L3));
-      el('previewBtn').addEventListener('click', () => speak("This is a quick voice preview from the selected avatar."));
-
-      // Fallback dispatcher: capture any click by id (handles rare overlay focus issues)
-      document.addEventListener('click', (e) => {
-        const id = e?.target?.id;
-        if (id === 'btn1') speak(L1);
-        else if (id === 'btn2') speak(L2);
-        else if (id === 'btn3') speak(L3);
-        else if (id === 'previewBtn') speak("This is a quick voice preview from the selected avatar.");
-      });
-
-      // Reconnect
-      recBtn.addEventListener('click', async () => {
-        try {
-          statusEl.textContent = "Reconnecting…";
-          streamReady = false;
-          videoEl.srcObject = null;
-          if (avatar && avatar.stop) { try { await avatar.stop(); } catch {} }
-          await startSession();
-        } catch (e) {
-          log("reconnect error:", e?.message || e);
-          statusEl.textContent = "Reconnect failed. See logs.";
-        }
-      });
-
-      // Mic (two-way)
-      const enableMic = async () => {
-        try {
-          micStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-          const track = micStream.getAudioTracks()[0];
-          if (avatar.setMicrophoneEnabled) {
-            avatar.setMicrophoneEnabled(true, track);
-          } else if (avatar.setMicrophone) {
-            await avatar.setMicrophone(micStream);
-          }
-          micOn = true;
-          micBtn.textContent = "Mic: on";
-          micBtn.className = "pill ok";
-          log("Microphone enabled.");
-        } catch (e) {
-          log("Mic enable error:", e?.message || e);
-          micBtn.textContent = "Mic: error";
-          micBtn.className = "pill bad";
-        }
-      };
-      const disableMic = () => {
-        try { if (micStream) micStream.getTracks().forEach(t => t.stop()); } catch {}
-        if (avatar?.setMicrophoneEnabled) avatar.setMicrophoneEnabled(false);
-        micOn = false;
-        micBtn.textContent = "Mic: off";
-        micBtn.className = "pill";
-        log("Microphone disabled.");
-      };
-      micBtn.addEventListener('click', () => micOn ? disableMic() : enableMic());
+      // Unmute on first tap (mobile-friendly)
+      const tryUnmute = async () => { try { v.muted = false; await v.play(); tap.style.display = "none"; } catch(e){} };
+      tap.addEventListener('click', tryUnmute);
+      v.addEventListener('click', tryUnmute);
+      document.body.addEventListener('touchstart', tryUnmute, { once:true });
     </script>
   </body>
 </html>
